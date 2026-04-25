@@ -46,6 +46,86 @@ npm run dev:webui
 - MCP SSE: `http://localhost:3000/mcp/sse`
 - MCP WebSocket: `ws://localhost:3000/mcp/ws`
 
+## Claude Code 插件
+
+OMMS-PRO 提供 Claude Code 插件，支持跨会话记忆自动召回与捕获。
+
+### 安装
+
+```bash
+# 克隆仓库
+git clone git@github.com:cxin21/OMMS-PRO.git
+cd OMMS-PRO
+
+# 安装后端依赖
+npm install
+
+# 安装插件到 Claude Code
+PLUGIN_SRC="$(pwd)/src/presentation/plugins/claude"
+PLUGIN_DATA="$HOME/.claude/plugins/data/omms-pro"
+
+# 复制插件文件
+mkdir -p "$PLUGIN_DATA"
+rsync -av --exclude='node_modules' "$PLUGIN_SRC/" "$PLUGIN_DATA/"
+
+# 安装插件依赖
+cd "$PLUGIN_DATA" && npm install && cd -
+
+# 设置执行权限
+chmod +x "$PLUGIN_DATA/hooks/session-start/init-session"
+chmod +x "$PLUGIN_DATA/hooks/pre-response/recall-memory"
+chmod +x "$PLUGIN_DATA/hooks/session-end/capture-session"
+chmod +x "$PLUGIN_DATA/mcp-wrapper.sh"
+
+# 配置项目 hooks (在项目根目录下)
+mkdir -p .claude
+cat > .claude/settings.json << 'EOF'
+{
+  "hooks": {
+    "SessionStart": [{ "command": "<PLUGIN_DATA>/hooks/session-start/init-session" }],
+    "UserPromptSubmit": [{ "command": "<PLUGIN_DATA>/hooks/pre-response/recall-memory" }],
+    "SessionEnd": [{ "command": "<PLUGIN_DATA>/hooks/session-end/capture-session" }]
+  }
+}
+EOF
+# 将 <PLUGIN_DATA> 替换为实际路径: $HOME/.claude/plugins/data/omms-pro
+
+# 配置 MCP Server
+cat > .mcp.json << 'EOF'
+{
+  "mcpServers": {
+    "omms-pro": {
+      "command": "bash",
+      "args": ["<PLUGIN_DATA>/mcp-wrapper.sh"]
+    }
+  }
+}
+EOF
+# 同样替换 <PLUGIN_DATA>
+```
+
+### 更新
+
+```bash
+cd OMMS-PRO
+
+# 拉取最新代码
+git pull
+
+# 同步插件文件
+PLUGIN_SRC="$(pwd)/src/presentation/plugins/claude"
+PLUGIN_DATA="$HOME/.claude/plugins/data/omms-pro"
+rsync -av --exclude='node_modules' "$PLUGIN_SRC/" "$PLUGIN_DATA/"
+
+# 更新依赖（如有新增）
+cd "$PLUGIN_DATA" && npm install && cd -
+
+# 设置执行权限
+chmod +x "$PLUGIN_DATA/hooks/"*/init-session "$PLUGIN_DATA/hooks/"*/recall-memory "$PLUGIN_DATA/hooks/"*/capture-session "$PLUGIN_DATA/mcp-wrapper.sh"
+
+# 重启 Claude Code 会话后执行 /reload-plugins 生效
+```
+
 ## 项目结构
 
 ```
