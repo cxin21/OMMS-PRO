@@ -24,7 +24,7 @@ import type {
   VectorSearchOptions,
   PalaceLocation,
 } from '../../../infrastructure/storage/core/types';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logging';
 import { PalaceStore } from '../../../infrastructure/storage/stores/palace-store';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
@@ -250,16 +250,7 @@ export class MemoryRecallManager {
     private embedder: (text: string) => Promise<number[]>,
     userConfig?: Partial<RecallConfig>
   ) {
-    this.logger = createLogger('MemoryRecallManager', {
-      level: 'debug',
-      output: 'both',
-      filePath: 'logs/memory-recall.log',
-      enableConsole: true,
-      enableFile: true,
-      enableRotation: true,
-      maxFileSize: '50MB',
-      maxFiles: 10,
-    });
+    this.logger = createServiceLogger('MemoryRecallManager');
 
     // 如果传入了配置则使用，否则从 ConfigManager 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
@@ -286,6 +277,9 @@ export class MemoryRecallManager {
       }
       this.logger.info('MemoryRecallManager loaded config', { config: this.config });
     }
+
+    // 使用 wrapWithErrorBoundary 包装 recall 方法
+    this.recall = wrapWithErrorBoundary(this.logger, 'MemoryRecallManager.recall', this.recall.bind(this)) as any;
   }
 
   /**
@@ -298,8 +292,6 @@ export class MemoryRecallManager {
    * 4. 其他Agent（agentId != 当前Agent，排除Step1,2,3）
    */
   async recall(input: RecallInput): Promise<RecallOutput> {
-    // [recall:303] 方法入口
-    this.logger.debug('[recall:303] Method entry');
     const result: RecallOutput = {
       memories: [],
       totalFound: 0,
@@ -308,257 +300,90 @@ export class MemoryRecallManager {
       meetsMinimum: false,
       scores: { vector: [], combined: [] },
     };
-    // [recall:311] result 对象初始化完成
 
-    this.logger.debug('[recall:313] Calculating limit');
-    const limit = Math.min(
-      input.limit ?? this.config.defaultLimit,
-      this.config.maxLimit
-    );
-    // [recall:317] limit 计算完成
-
-    // 生成查询向量（query 为空则使用零向量，跳过向量搜索）
-    this.logger.debug('[recall:319] Generating query vector');
+    const limit = Math.min(input.limit ?? this.config.defaultLimit, this.config.maxLimit);
     const queryVector = input.query ? await this.embedder(input.query) : [];
-    // [recall:320] queryVector 生成完成
-
-    // 记录已召回的 UID，避免重复
-    this.logger.debug('[recall:322] Initializing recalledUids Set');
     const recalledUids = new Set<string>();
 
-    this.logger.debug('[recall:324] Starting progressive recall', {
+    this.logger.info('Starting progressive recall', {
       query: input.query ? input.query.substring(0, 50) : '(no query)',
-      currentAgentId: input.currentAgentId,
-      currentSessionId: input.currentSessionId,
+      agentId: input.currentAgentId,
       minMemories: this.config.minMemories,
     });
 
-    // ============================================================
     // Step 1: 当前会话记忆
-    // ============================================================
-    // [recall:333] 进入 Step 1: 当前会话记忆
-    this.logger.debug('[recall:334] Step 1: Starting current session recall');
-    let step = 1;
-    this.logger.debug('[recall:335] Calling recallByScope for SESSION');
     const step1Found = await this.recallByScope({
-      query: input.query,
-      queryVector,
-      scope: MemoryScope.SESSION,
-      agentId: input.currentAgentId,
-      sessionId: input.currentSessionId,
-      currentAgentId: input.currentAgentId,
-      excludeUids: [],
-      type: input.type,
-      types: input.types,
-      tags: input.tags,
-      timeRange: input.timeRange,
-      limit,
+      query: input.query, queryVector, scope: MemoryScope.SESSION,
+      agentId: input.currentAgentId, sessionId: input.currentSessionId,
+      currentAgentId: input.currentAgentId, excludeUids: [],
+      type: input.type, types: input.types, tags: input.tags, timeRange: input.timeRange, limit,
     });
-    // [recall:349] step1Found 返回
-
-    this.logger.debug('[recall:350] Processing step1Found results');
     for (const memory of step1Found.memories) {
       recalledUids.add(memory.uid);
       result.memories.push(memory);
       result.scopeDistribution.session++;
     }
-    // [recall:355] step1Found 结果处理完成
+    result.recallPath.push({ scope: 'CURRENT_SESSION', step: 1, found: step1Found.memories.length, totalAfterStep: result.memories.length });
+    this.logger.info('Step 1 (session) completed', { found: step1Found.memories.length, total: result.memories.length });
 
-    result.recallPath.push({
-      scope: 'CURRENT_SESSION',
-      step,
-      found: step1Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    this.logger.debug(`[recall:363] Step ${step}: Current session completed`, {
-      found: step1Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    // 达到最小要求，直接返回
-    this.logger.debug('[recall:369] Checking if minMemories requirement met');
     if (result.memories.length >= this.config.minMemories) {
-      this.logger.debug('[recall:370] Requirement met, returning via finalizeResult');
       return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
-    // ============================================================
-    // Step 2: 当前Agent记忆（排除Step1）
-    // 条件：scope=AGENT OR (scope=SESSION AND agentId=当前Agent)
-    // ============================================================
-    // [recall:377] 进入 Step 2: 当前Agent记忆
-    this.logger.debug('[recall:377] Step 2: Starting current agent recall');
-    step = 2;
-
-    // 2a. 当前Agent的AGENT级记忆
-    this.logger.debug('[recall:380] Step 2a: Calling recallByScope for AGENT scope');
+    // Step 2: 当前Agent记忆
     const step2aFound = await this.recallByScope({
-      query: input.query,
-      queryVector,
-      scope: MemoryScope.AGENT,
-      agentId: input.currentAgentId,
-      currentAgentId: input.currentAgentId,
+      query: input.query, queryVector, scope: MemoryScope.AGENT,
+      agentId: input.currentAgentId, currentAgentId: input.currentAgentId,
       excludeUids: Array.from(recalledUids),
-      type: input.type,
-      types: input.types,
-      tags: input.tags,
-      timeRange: input.timeRange,
-      limit,
+      type: input.type, types: input.types, tags: input.tags, timeRange: input.timeRange, limit,
     });
-    // [recall:393] step2aFound 返回
-
-    this.logger.debug('[recall:394] Processing step2aFound results');
     for (const memory of step2aFound.memories) {
-      if (!recalledUids.has(memory.uid)) {
-        recalledUids.add(memory.uid);
-        result.memories.push(memory);
-        result.scopeDistribution.agent++;
-      }
+      if (!recalledUids.has(memory.uid)) { recalledUids.add(memory.uid); result.memories.push(memory); result.scopeDistribution.agent++; }
     }
-    // [recall:401] step2aFound 结果处理完成
-
-    // 2b. 当前Agent的SESSION级记忆（排除Step1已召回的）
-    this.logger.debug('[recall:403] Step 2b: Calling recallByScope for SESSION scope with currentAgentId filter');
     const step2bFound = await this.recallByScope({
-      query: input.query,
-      queryVector,
-      scope: MemoryScope.SESSION,
-      agentId: input.currentAgentId,
-      currentAgentId: input.currentAgentId,
+      query: input.query, queryVector, scope: MemoryScope.SESSION,
+      agentId: input.currentAgentId, currentAgentId: input.currentAgentId,
       excludeUids: Array.from(recalledUids),
-      type: input.type,
-      types: input.types,
-      tags: input.tags,
-      timeRange: input.timeRange,
-      limit,
+      type: input.type, types: input.types, tags: input.tags, timeRange: input.timeRange, limit,
     });
-    // [recall:416] step2bFound 返回
-
-    this.logger.debug('[recall:417] Processing step2bFound results');
     for (const memory of step2bFound.memories) {
-      if (!recalledUids.has(memory.uid)) {
-        recalledUids.add(memory.uid);
-        result.memories.push(memory);
-        result.scopeDistribution.agent++; // SESSION级但属于当前Agent，归为agent统计
-      }
+      if (!recalledUids.has(memory.uid)) { recalledUids.add(memory.uid); result.memories.push(memory); result.scopeDistribution.agent++; }
     }
-    // [recall:424] step2bFound 结果处理完成
+    result.recallPath.push({ scope: 'CURRENT_AGENT', step: 2, found: step2aFound.memories.length + step2bFound.memories.length, totalAfterStep: result.memories.length });
+    this.logger.info('Step 2 (agent) completed', { found: step2aFound.memories.length + step2bFound.memories.length, total: result.memories.length });
 
-    result.recallPath.push({
-      scope: 'CURRENT_AGENT',
-      step,
-      found: step2aFound.memories.length + step2bFound.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    this.logger.debug(`[recall:432] Step ${step}: Current agent completed`, {
-      found2a: step2aFound.memories.length,
-      found2b: step2bFound.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    // 达到最小要求，直接返回
-    this.logger.debug('[recall:439] Checking if minMemories requirement met');
     if (result.memories.length >= this.config.minMemories) {
-      this.logger.debug('[recall:440] Requirement met, returning via finalizeResult');
       return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
-    // ============================================================
-    // Step 3: 全局记忆（排除Step1,2）
-    // ============================================================
-    // [recall:446] 进入 Step 3: 全局记忆
-    this.logger.debug('[recall:446] Step 3: Starting global recall');
-    step = 3;
-    this.logger.debug('[recall:447] Calling recallByScope for GLOBAL scope');
+    // Step 3: 全局记忆
     const step3Found = await this.recallByScope({
-      query: input.query,
-      queryVector,
-      scope: MemoryScope.GLOBAL,
-      currentAgentId: input.currentAgentId,
-      excludeUids: Array.from(recalledUids),
-      type: input.type,
-      types: input.types,
-      tags: input.tags,
-      timeRange: input.timeRange,
-      limit,
+      query: input.query, queryVector, scope: MemoryScope.GLOBAL,
+      currentAgentId: input.currentAgentId, excludeUids: Array.from(recalledUids),
+      type: input.type, types: input.types, tags: input.tags, timeRange: input.timeRange, limit,
     });
-    // [recall:459] step3Found 返回
-
-    this.logger.debug('[recall:460] Processing step3Found results');
     for (const memory of step3Found.memories) {
-      if (!recalledUids.has(memory.uid)) {
-        recalledUids.add(memory.uid);
-        result.memories.push(memory);
-        result.scopeDistribution.global++;
-      }
+      if (!recalledUids.has(memory.uid)) { recalledUids.add(memory.uid); result.memories.push(memory); result.scopeDistribution.global++; }
     }
-    // [recall:467] step3Found 结果处理完成
+    result.recallPath.push({ scope: 'GLOBAL', step: 3, found: step3Found.memories.length, totalAfterStep: result.memories.length });
+    this.logger.info('Step 3 (global) completed', { found: step3Found.memories.length, total: result.memories.length });
 
-    result.recallPath.push({
-      scope: 'GLOBAL',
-      step,
-      found: step3Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    this.logger.debug(`[recall:475] Step ${step}: Global completed`, {
-      found: step3Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    // 达到最小要求，直接返回
-    this.logger.debug('[recall:481] Checking if minMemories requirement met');
     if (result.memories.length >= this.config.minMemories) {
-      this.logger.debug('[recall:482] Requirement met, returning via finalizeResult');
       return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
-    // ============================================================
-    // Step 4: 其他Agent记忆（排除Step1,2,3）
-    // ============================================================
-    // [recall:488] 进入 Step 4: 其他Agent记忆
-    this.logger.debug('[recall:488] Step 4: Starting other agents recall');
-    step = 4;
-    this.logger.debug('[recall:489] Calling recallByScope for OTHER_AGENTS');
+    // Step 4: 其他Agent记忆
     const step4Found = await this.recallByScope({
-      query: input.query,
-      queryVector,
-      agentIdNotEq: input.currentAgentId,
-      currentAgentId: input.currentAgentId,
-      excludeUids: Array.from(recalledUids),
-      type: input.type,
-      types: input.types,
-      tags: input.tags,
-      timeRange: input.timeRange,
-      limit,
+      query: input.query, queryVector, agentIdNotEq: input.currentAgentId,
+      currentAgentId: input.currentAgentId, excludeUids: Array.from(recalledUids),
+      type: input.type, types: input.types, tags: input.tags, timeRange: input.timeRange, limit,
     });
-    // [recall:501] step4Found 返回
-
-    this.logger.debug('[recall:502] Processing step4Found results');
     for (const memory of step4Found.memories) {
-      if (!recalledUids.has(memory.uid)) {
-        recalledUids.add(memory.uid);
-        result.memories.push(memory);
-        result.scopeDistribution.other++;
-      }
+      if (!recalledUids.has(memory.uid)) { recalledUids.add(memory.uid); result.memories.push(memory); result.scopeDistribution.other++; }
     }
-    // [recall:509] step4Found 结果处理完成
+    result.recallPath.push({ scope: 'OTHER_AGENTS', step: 4, found: step4Found.memories.length, totalAfterStep: result.memories.length });
+    this.logger.info('Step 4 (other agents) completed', { found: step4Found.memories.length, total: result.memories.length });
 
-    result.recallPath.push({
-      scope: 'OTHER_AGENTS',
-      step,
-      found: step4Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    this.logger.debug(`[recall:517] Step ${step}: Other agents completed`, {
-      found: step4Found.memories.length,
-      totalAfterStep: result.memories.length,
-    });
-
-    this.logger.debug('[recall:522] All steps completed, returning via finalizeResult');
     return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
   }
 

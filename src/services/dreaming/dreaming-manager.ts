@@ -11,7 +11,7 @@
  * @since v2.0.0
  */
 
-import { createLogger, type ILogger } from '../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../shared/logging';
 import { ObjectUtils } from '../../shared/utils/object';
 import { IDGenerator } from '../../shared/utils/id-generator';
 import type { StorageMemoryService } from '../memory/core/storage-memory-service';
@@ -137,16 +137,7 @@ export class DreamingManager {
     userConfig?: Partial<DreamingEngineConfig>,
     private llmExtractor?: ILLMExtractor
   ) {
-    this.logger = createLogger('DreamingManager', {
-      level: 'debug',
-      output: 'both',
-      filePath: 'logs/dreaming.log',
-      enableConsole: true,
-      enableFile: true,
-      enableRotation: true,
-      maxFileSize: '50MB',
-      maxFiles: 10,
-    });
+    this.logger = createServiceLogger('DreamingManager');
 
     // 合并配置：如果传入了配置则使用，否则从 ConfigManager 或 ConfigLoader 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
@@ -279,21 +270,19 @@ export class DreamingManager {
   /**
    * 记忆整理主入口 - 编排三阶段流程
    *
+   * 注意：此方法捕获错误后返回 FAILED 报告（不抛出异常），
+   * 因此不使用 @withErrorBoundary 装饰器，而是保留内部 try-catch 记录错误。
+   *
    * @param input - 可选的整理输入
    * @returns OrganizationReport 整理报告
    */
   async dream(input?: OrganizationInput): Promise<OrganizationReport> {
-    // [dream:277] 方法入口
-    this.logger.debug('[dream:277] Method entry');
     this.checkInitialized();
-    // [dream:279] checkInitialized passed
 
     const reportId = IDGenerator.generate('org');
     const startTime = Date.now();
-    // [dream:281] reportId and startTime initialized
 
-    this.logger.info('[dream:283] Starting memory organization', { reportId, input });
-    // [dream:283] Initial log written
+    this.logger.info('Starting memory organization', { reportId, type: input?.type ?? 'ALL' });
 
     const report: OrganizationReport = {
       id: reportId,
@@ -312,18 +301,12 @@ export class DreamingManager {
       executedAt: Date.now(),
       totalDuration: 0,
     };
-    // [dream:301] Report object initialized
 
     try {
       // Phase 1: SCAN
-      // [dream:304] Entering Phase 1 SCAN
-      this.logger.debug('[dream:305] Phase 1: SCAN starting');
+      const phase1Timer = this.logger.startTimer('dreaming.phase1.scan');
       const scanResult = await this.phase1Scan();
-      // [dream:306] phase1Scan returned
-      this.logger.debug('[dream:306] Phase 1 scan result received', {
-        scannedCount: scanResult.scannedCount,
-        candidates: scanResult.candidates.length,
-      });
+      phase1Timer();
       report.phases.scan = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -331,21 +314,12 @@ export class DreamingManager {
         foundIssues: 0,
         duration: Date.now() - startTime,
       };
-      // [dream:313] scan phase report updated
 
       // Phase 2: ANALYZE
-      // [dream:315] Entering Phase 2 ANALYZE
-      this.logger.debug('[dream:316] Phase 2: ANALYZE starting');
+      const phase2Timer = this.logger.startTimer('dreaming.phase2.analyze');
       const analyzeStart = Date.now();
       const analyzeResult = await this.phase2Analyze(scanResult.candidates, input);
-      // [dream:318] phase2Analyze returned
-      this.logger.debug('[dream:318] Phase 2 analyze result received', {
-        foundIssues: analyzeResult.foundIssues,
-        similarGroups: analyzeResult.similarGroups.length,
-        brokenRelations: analyzeResult.brokenRelations.length,
-        orphanedNodes: analyzeResult.orphanedNodes.length,
-        archivalCandidates: analyzeResult.archivalCandidates.length,
-      });
+      phase2Timer();
       report.phases.analyze = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -353,21 +327,12 @@ export class DreamingManager {
         foundIssues: analyzeResult.foundIssues,
         duration: Date.now() - analyzeStart,
       };
-      // [dream:325] analyze phase report updated
 
       // Phase 3: EXECUTE
-      // [dream:327] Entering Phase 3 EXECUTE
-      this.logger.debug('[dream:328] Phase 3: EXECUTE starting');
+      const phase3Timer = this.logger.startTimer('dreaming.phase3.execute');
       const executeStart = Date.now();
       const executeResult = await this.phase3Execute(analyzeResult, input);
-      // [dream:330] phase3Execute returned
-      this.logger.debug('[dream:330] Phase 3 execute result received', {
-        memoriesMerged: executeResult.memoriesMerged,
-        memoriesArchived: executeResult.memoriesArchived,
-        memoriesDeleted: executeResult.memoriesDeleted,
-        relationsRebuilt: executeResult.relationsRebuilt,
-        storageFreed: executeResult.storageFreed,
-      });
+      phase3Timer();
       report.phases.execute = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -375,22 +340,17 @@ export class DreamingManager {
         foundIssues: executeResult.memoriesMerged + executeResult.memoriesArchived,
         duration: Date.now() - executeStart,
       };
-      // [dream:337] execute phase report updated
 
-      // Update statistics
-      // [dream:339] Updating final statistics
       report.memoriesMerged = executeResult.memoriesMerged;
       report.memoriesArchived = executeResult.memoriesArchived;
       report.memoriesDeleted = executeResult.memoriesDeleted;
       report.relationsRebuilt = executeResult.relationsRebuilt;
       report.storageFreed = executeResult.storageFreed;
-      // [dream:344] Statistics updated
 
       report.status = OrganizationStatus.COMPLETED;
       report.totalDuration = Date.now() - startTime;
-      // [dream:346] Report status and duration updated
 
-      this.logger.info('[dream:348] Memory organization completed', {
+      this.logger.info('Memory organization completed', {
         reportId,
         memoriesMerged: report.memoriesMerged,
         memoriesArchived: report.memoriesArchived,
@@ -399,26 +359,17 @@ export class DreamingManager {
         storageFreed: report.storageFreed,
         totalDuration: report.totalDuration,
       });
-      // [dream:354] Completion log written
 
-      // Save report
-      // [dream:356] Saving report to storage
       await this.storage.saveReport(report);
-      // [dream:357] Report saved
 
     } catch (error) {
-      // [dream:359] Entering catch block
       report.status = OrganizationStatus.FAILED;
       report.totalDuration = Date.now() - startTime;
-      // [dream:361] Report status set to FAILED
 
-      this.logger.error('[dream:363] Memory organization failed', {
+      this.logger.error('Memory organization failed', error instanceof Error ? error : new Error(String(error)), {
         reportId,
-        error: error instanceof Error ? error.message : error,
       });
-      // [dream:366] Error log written
     }
-    // [dream:368] Returning report
 
     return report;
   }
@@ -533,7 +484,6 @@ export class DreamingManager {
           }
         } catch (error) {
           const errorMsg = `归纳分组失败 ${group.primaryMemory}: ${error instanceof Error ? error.message : error}`;
-          this.logger.error(errorMsg);
           result.errors.push(errorMsg);
         }
       }
@@ -549,7 +499,9 @@ export class DreamingManager {
 
     } catch (error) {
       const errorMsg = `记忆归纳整理失败: ${error instanceof Error ? error.message : error}`;
-      this.logger.error(errorMsg);
+      this.logger.error('记忆归纳整理失败', error instanceof Error ? error : new Error(String(error)), {
+        date: today,
+      });
       result.errors.push(errorMsg);
     }
 
@@ -603,11 +555,7 @@ export class DreamingManager {
         tags: m.tags || [],
       }));
     } catch (error) {
-      this.logger.error('获取指定日期记忆失败', {
-        date,
-        error: error instanceof Error ? error.message : error,
-      });
-      return [];
+      throw new Error(`获取指定日期记忆失败 (${date}): ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -894,7 +842,6 @@ export class DreamingManager {
 
     } catch (error) {
       const errorMsg = `LLM 归纳失败: ${error instanceof Error ? error.message : error}`;
-      this.logger.error(errorMsg, { primaryMemory });
       return { success: false, archivedCount: 0, error: errorMsg };
     }
   }
@@ -1354,7 +1301,7 @@ export class DreamingManager {
         this.logger.debug('触发条件不满足，跳过本次整理');
       }
     } catch (error) {
-      this.logger.error('调度执行失败', {
+      this.logger.warn('调度执行失败，将在下次调度时重试', {
         error: error instanceof Error ? error.message : error,
       });
     }
@@ -1613,9 +1560,7 @@ export class DreamingManager {
         duration: result.duration,
       });
     } catch (error) {
-      this.logger.error('performActiveLearning 失败', {
-        error: error instanceof Error ? error.message : error,
-      });
+      this.logger.error('performActiveLearning 失败', error instanceof Error ? error : new Error(String(error)));
     }
 
     return result;
@@ -2023,9 +1968,7 @@ export class DreamingManager {
       result.duration = Date.now() - startTime;
       this.logger.info('增量图谱更新完成', result);
     } catch (error) {
-      this.logger.error('增量图谱更新失败', {
-        error: error instanceof Error ? error.message : error,
-      });
+      this.logger.error('增量图谱更新失败', error instanceof Error ? error : new Error(String(error)));
       result.duration = Date.now() - startTime;
     }
 

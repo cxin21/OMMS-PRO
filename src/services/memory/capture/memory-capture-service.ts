@@ -25,7 +25,7 @@ import type { LLMScoringResult } from '../llm/llm-extractor';
 import type { ProfileManager } from '../../profile/profile-manager';
 import { MemoryInclusionDetector } from '../analysis/memory-inclusion-detector';
 import type { InclusionResult } from '../../../core/types/memory';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
@@ -87,17 +87,11 @@ export class MemoryCaptureService {
     } else {
       this.config = this.loadConfigFromManager();
     }
-    this.logger = createLogger('MemoryCaptureService', {
-      level: 'debug',
-      output: 'both',
-      filePath: 'logs/memory-capture.log',
-      enableConsole: true,
-      enableFile: true,
-      enableRotation: true,
-      maxFileSize: '50MB',
-      maxFiles: 10,
-    });
+    this.logger = createServiceLogger('MemoryCaptureService');
 this.inclusionDetector = new MemoryInclusionDetector();
+
+    // 使用 wrapWithErrorBoundary 包装 capture 方法
+    this.capture = wrapWithErrorBoundary(this.logger, 'MemoryCaptureService.capture', this.capture.bind(this)) as any;
   }
 
   /**
@@ -154,354 +148,180 @@ this.inclusionDetector = new MemoryInclusionDetector();
    * 执行记忆捕获
    */
   async capture(input: CaptureInput): Promise<CaptureResult> {
-    // [capture:133] 方法入口
-    this.logger.debug('[capture:133] Method entry');
     const result: CaptureResult = {
       captured: [],
       skipped: [],
     };
-    // [capture:136] 初始化 result 对象完成
 
-    // 处理对话轮次或文本
-    this.logger.debug('[capture:140] Processing input to extract text');
     const text = this.extractTextFromInput(input);
-    // [capture:141] text 提取完成
 
-    this.logger.info('[capture:142] Starting memory capture', {
-      agentId: input.agentId,
-      sessionId: input.sessionId,
-      textLength: text.length,
-      enableLLMSummarization: this.config.enableLLMSummarization,
+    let enrichedMemories: Array<{
+      item: ExtractedMemory;
+      summary: string;
+      importance: number;
+      scopeScore: number;
+      confidence: number;
+      reasoning: string;
+    }> = [];
+
+    // 1. LLM 提取记忆
+    const extracted = await this.llmExtractor.extractMemories(text, {
+      maxCount: this.config.maxMemoriesPerCapture,
+      typeHints: this.getDefaultTypes(),
     });
-    // [capture:148] 初始日志记录完成
+    this.logger.info('LLM extraction complete', { count: extracted.length });
 
-    try {
-      // [capture:150] 进入 try 块
-      let enrichedMemories: Array<{
-        item: ExtractedMemory;
-        summary: string;
-        importance: number;
-        scopeScore: number;
-        confidence: number;
-        reasoning: string;
-      }> = [];
-      // [capture:158] enrichedMemories 数组初始化
+    // 2. 置信度过滤
+    const qualified = this.filterByConfidence(extracted, result.skipped);
+    this.logger.info('Confidence filtering complete', { qualifiedCount: qualified.length, filtered: extracted.length - qualified.length });
 
-      // 1. LLM 一次提取多条记忆
-      this.logger.debug('[capture:161] Calling LLM extractor');
-      const extracted = await this.llmExtractor.extractMemories(text, {
-        maxCount: this.config.maxMemoriesPerCapture,
-        typeHints: this.getDefaultTypes(),
-      });
-      // [capture:166] LLM 提取完成
-      this.logger.debug('[capture:166] LLM extraction complete', { count: extracted.length });
-
-      // 2. 置信度过滤
-      this.logger.debug('[capture:169] Filtering by confidence');
-      const qualified = this.filterByConfidence(extracted, result.skipped);
-      // [capture:171] 置信度过滤完成
-      this.logger.debug('[capture:171] Confidence filtering complete', { qualifiedCount: qualified.length });
-
-      // 3. 遍历每条记忆，分别生成摘要和评分
-      this.logger.debug('[capture:174] Starting loop over qualified memories');
-      for (const item of qualified) {
-        // [capture:175] 进入 for 循环处理单条记忆
-        try {
-          this.logger.debug('[capture:176] Calling processMemory');
-          const enriched = await this.processMemory(item, input);
-          // [capture:177] processMemory 完成
-          enrichedMemories.push(enriched);
-          this.logger.debug('[capture:178] Memory added to enrichedMemories', { content: enriched.item.content.substring(0, 30) });
-        } catch (error) {
-          // [capture:180] processMemory 捕获错误
-          this.logger.error('[capture:180] Failed to process memory', {
-            error: String(error),
-            content: item.content.substring(0, 50),
-          });
-          result.skipped.push({
-            content: item.content,
-            reason: 'error',
-            details: String(error),
-          });
-        }
-      }
-      // [capture:189] for 循环结束
-      this.logger.debug('[capture:189] Enriched memories loop complete', { total: enrichedMemories.length });
-
-      // 4. 遍历每条已富化的记忆，进行版本检测和存储
-      this.logger.debug('[capture:192] Starting version detection and storage loop');
-      for (const enriched of enrichedMemories) {
-        // [capture:193] 进入版本检测循环
-        try {
-          this.logger.debug('[capture:194] Setting timestamps and scores');
-          const now = Date.now();
-          const scores = {
-            importance: enriched.importance,
-            scopeScore: enriched.scopeScore,
-          };
-          // [capture:199] scores 设置完成
-
-          // ========== 两级检测 + 话题分组 ==========
-          this.logger.debug('[capture:202] Level 1: Finding candidate memories with low threshold');
-
-          // 第一级：快速粗筛 - 使用低阈值(0.7)查找候选
-          const candidates = await this.versionManager.findCandidates(enriched.item.content, {
-            agentId: input.agentId,
-            type: enriched.item.type,
-            limit: 10,
-          });
-          // [capture:208] findCandidates 完成
-          this.logger.debug('[capture:208] Candidates found', { count: candidates.length });
-
-          // 如果没有候选记忆，直接存储为新记忆
-          this.logger.debug('[capture:210] Checking if candidates.length === 0');
-          if (candidates.length === 0) {
-            // [capture:212] 分支：没有候选，直接存储新记忆
-            this.logger.info('[capture:212] No candidates, storing as new memory');
-            const captured = await this.storeMemory(
-              enriched.item,
-              enriched.summary,
-              scores,
-              input,
-              { isNewVersion: false, existingMemoryId: null, similarity: 0 },
-              now,
-              {
-                importance: enriched.importance,
-                scope: enriched.scopeScore,
-                confidence: enriched.confidence,
-                reasoning: enriched.reasoning,
-              }
-            );
-            // [capture:225] storeMemory 完成
-            result.captured.push(captured);
-            this.logger.debug('[capture:226] Continue to next memory');
-            continue;
-          }
-
-          // 第二级：话题分组过滤 - 只保留与当前记忆 topic 相关的候选
-          this.logger.debug('[capture:230] Level 2: Filtering candidates by topic');
-          const relevantCandidates = await this.filterCandidatesByTopic(candidates, enriched.item.topicId);
-          // [capture:231] filterCandidatesByTopic 完成
-          this.logger.debug('[capture:231] Relevant candidates after topic filter', { count: relevantCandidates.length });
-
-          // 如果没有相关候选，直接存储为新记忆
-          this.logger.debug('[capture:233] Checking if relevantCandidates.length === 0');
-          if (relevantCandidates.length === 0) {
-            // [capture:234] 分支：话题不匹配，存储为新记忆
-            this.logger.info('[capture:234] No relevant candidates by topic, storing as new memory');
-            const captured = await this.storeMemory(
-              enriched.item,
-              enriched.summary,
-              scores,
-              input,
-              { isNewVersion: false, existingMemoryId: null, similarity: 0 },
-              now,
-              {
-                importance: enriched.importance,
-                scope: enriched.scopeScore,
-                confidence: enriched.confidence,
-                reasoning: enriched.reasoning,
-              }
-            );
-            // [capture:249] storeMemory 完成
-            result.captured.push(captured);
-            this.logger.debug('[capture:250] Continue to next memory');
-            continue;
-          }
-
-          // 第三级：对候选进行版本检测和语义包含判断
-          this.logger.debug('[capture:253] Level 3: Version detection and semantic inclusion check');
-          let shouldStore = true;
-          let detection = { isNewVersion: false, existingMemoryId: null as string | null, similarity: 0 };
-          // [capture:255] 初始化 shouldStore 和 detection
-
-          this.logger.debug('[capture:256] Starting loop over relevantCandidates');
-          for (const candidate of relevantCandidates) {
-            // [capture:257] 处理每个候选
-            const candidateSimilarity = candidate.score;
-            this.logger.debug('[capture:259] Checking candidate', { memoryId: candidate.memoryId, similarity: candidateSimilarity });
-
-            // 高相似度(>=0.95)直接认为是相同或新版本
-            this.logger.debug('[capture:261] Checking if similarity >= 0.95');
-            if (candidateSimilarity >= 0.95) {
-              // [capture:262] 分支：高相似度，直接版本化
-              this.logger.info('[capture:262] High similarity (>=0.95), creating new version', {
-                existingMemoryId: candidate.memoryId,
-                similarity: candidateSimilarity,
-              });
-              detection = {
-                isNewVersion: true,
-                existingMemoryId: candidate.memoryId,
-                similarity: candidateSimilarity,
-              };
-              break;
-            }
-
-            // 中等相似度[0.7, 0.95)需要LLM语义检测
-            this.logger.debug('[capture:271] Checking if similarity in [0.7, 0.95)');
-            if (candidateSimilarity >= 0.7 && candidateSimilarity < 0.95) {
-              // [capture:272] 分支：中等相似度，调用 LLM 语义检测
-              this.logger.debug('[capture:272] Calling checkSemanticInclusion');
-              const inclusionResult = await this.checkSemanticInclusion(
-                enriched.item,
-                enriched.summary,
-                candidate.memoryId
-              );
-              // [capture:277] checkSemanticInclusion 返回
-              this.logger.debug('[capture:278] Inclusion check result', { type: inclusionResult?.type, score: inclusionResult?.inclusionScore });
-
-              if (inclusionResult) {
-                switch (inclusionResult.type) {
-                  case 'b_extends_a':
-                    // [capture:281] B extends A
-                    this.logger.info('[capture:281] B extends A, creating new version', { existingMemoryId: candidate.memoryId });
-                    detection = {
-                      isNewVersion: true,
-                      existingMemoryId: candidate.memoryId,
-                      similarity: candidateSimilarity,
-                    };
-                    break;
-
-                  case 'a_extends_b':
-                    // [capture:290] A extends B，B 合并到 A
-                    this.logger.info('[capture:290] A extends B, B merged into A - B discarded', {
-                      newMemory: enriched.item.content.substring(0, 50),
-                      existingMemoryId: candidate.memoryId,
-                    });
-                    shouldStore = false;
-                    break;
-
-                  case 'identical':
-                    // [capture:299] 完全相同
-                    this.logger.info('[capture:299] Memory identical to existing, skipping', {
-                      newMemory: enriched.item.content.substring(0, 50),
-                      existingMemoryId: candidate.memoryId,
-                    });
-                    shouldStore = false;
-                    break;
-
-                  case 'overlapping':
-                    // [capture:308] 部分相关
-                    this.logger.debug('[capture:308] Overlapping, continue to next candidate');
-                    break;
-                  case 'unrelated':
-                    // [capture:309] 完全无关
-                    this.logger.debug('[capture:309] Unrelated, continue to next candidate');
-                    continue;
-                }
-
-                if (!shouldStore || detection.isNewVersion) {
-                  this.logger.debug('[capture:314] Breaking from candidate loop');
-                  break;
-                }
-              }
-            }
-          }
-          // [capture:319] 候选循环结束
-          this.logger.debug('[capture:319] Candidate loop finished', { shouldStore, detection });
-
-          // 如果不应该存储，跳过
-          this.logger.debug('[capture:321] Checking if shouldStore === false');
-          if (!shouldStore) {
-            // [capture:322] 分支：不存储，跳过
-            this.logger.debug('[capture:322] shouldStore is false, skipping this memory');
-            continue;
-          }
-
-          // 如果检测到需要创建新版本，使用锁防止并发问题
-          this.logger.debug('[capture:326] Checking if need version lock');
-          if (detection.isNewVersion && detection.existingMemoryId) {
-            // [capture:327] 需要获取版本锁
-            const lockKey = `version:${detection.existingMemoryId}`;
-            this.logger.debug('[capture:328] Acquiring version lock', { lockKey });
-            const releaseLock = await this.acquireVersionLock(lockKey);
-            // [capture:329] 获取锁完成
-
-            if (releaseLock) {
-              // [capture:331] 获取锁成功
-              try {
-                // 双重检测：获取锁后再次检测，确认仍然是最新版本
-                this.logger.debug('[capture:333] Double-check version after lock');
-                const recheck = await this.versionManager.detectVersion(enriched.item.content, {
-                  agentId: input.agentId,
-                  type: enriched.item.type,
-                });
-                // [capture:337] 重新检测完成
-                this.logger.debug('[capture:339] Recheck result', { isNewVersion: recheck.isNewVersion, existingMemoryId: recheck.existingMemoryId });
-
-                // 如果重新检测后发现不再是最新版本（已被其他请求创建），跳过
-                if (!recheck.isNewVersion || recheck.existingMemoryId !== detection.existingMemoryId) {
-                  this.logger.debug('[capture:340] Version already created by concurrent request, skipping');
-                  detection = recheck;
-                }
-              } finally {
-                // [capture:335] 释放锁
-                this.logger.debug('[capture:335] Releasing version lock');
-                releaseLock();
-              }
-            } else {
-              // [capture:338] 获取锁失败
-              this.logger.warn('[capture:338] Failed to acquire version lock, creating new memory', {
-                existingMemoryId: detection.existingMemoryId,
-              });
-              detection = { isNewVersion: false, existingMemoryId: null, similarity: 0 };
-            }
-          }
-
-          // 存储记忆
-          this.logger.debug('[capture:347] Storing memory');
-          const captured = await this.storeMemory(
-            enriched.item,
-            enriched.summary,
-            scores,
-            input,
-            detection,
-            now,
-            {
-              importance: enriched.importance,
-              scope: enriched.scopeScore,
-              confidence: enriched.confidence,
-              reasoning: enriched.reasoning,
-            }
-          );
-          // [capture:361] storeMemory 完成
-          this.logger.debug('[capture:361] Memory stored successfully', { content: captured.content.substring(0, 30), type: captured.type });
-          result.captured.push(captured);
-        } catch (error) {
-          // [capture:363] 捕获存储错误
-          this.logger.error('[capture:363] Failed to store memory', {
-            error: String(error),
-            content: enriched.item.content.substring(0, 50),
-          });
-          result.skipped.push({
-            content: enriched.item.content,
-            reason: 'error',
-            details: String(error),
-          });
-        }
-      }
-      // [capture:373] 版本检测循环结束
-
-      this.logger.info('[capture:375] Memory capture completed', {
-        captured: result.captured.length,
-        skipped: result.skipped.length,
-      });
-
-      // 5. 自动用户画像分析（异步，不阻塞返回）
-      if (this.profileManager && result.captured.length > 0) {
-        this.analyzeAndUpdateProfile(input, result.captured).catch((err) => {
-          this.logger.warn('Auto profile analysis failed', { error: String(err) });
+    // 3. 生成摘要和评分
+    for (const item of qualified) {
+      try {
+        const enriched = await this.processMemory(item, input);
+        enrichedMemories.push(enriched);
+      } catch (error) {
+        result.skipped.push({
+          content: item.content,
+          reason: 'error',
+          details: String(error),
         });
       }
-
-    } catch (error) {
-      // [capture:381] 捕获最终错误
-      this.logger.error('[capture:381] Memory capture failed', { error: String(error) });
-      throw error;
     }
 
-    // [capture:386] 返回结果
-    this.logger.debug('[capture:386] Method exit');
+    // 4. 版本检测和存储
+    for (const enriched of enrichedMemories) {
+      try {
+        const now = Date.now();
+        const scores = {
+          importance: enriched.importance,
+          scopeScore: enriched.scopeScore,
+        };
+
+        // 第一级：快速粗筛
+        const candidates = await this.versionManager.findCandidates(enriched.item.content, {
+          agentId: input.agentId,
+          type: enriched.item.type,
+          limit: 10,
+        });
+
+        if (candidates.length === 0) {
+          const captured = await this.storeMemory(
+            enriched.item, enriched.summary, scores, input,
+            { isNewVersion: false, existingMemoryId: null, similarity: 0 }, now,
+            { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+          );
+          result.captured.push(captured);
+          continue;
+        }
+
+        // 第二级：话题分组过滤
+        const relevantCandidates = await this.filterCandidatesByTopic(candidates, enriched.item.topicId);
+
+        if (relevantCandidates.length === 0) {
+          const captured = await this.storeMemory(
+            enriched.item, enriched.summary, scores, input,
+            { isNewVersion: false, existingMemoryId: null, similarity: 0 }, now,
+            { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+          );
+          result.captured.push(captured);
+          continue;
+        }
+
+        // 第三级：版本检测和语义包含判断
+        let shouldStore = true;
+        let detection = { isNewVersion: false, existingMemoryId: null as string | null, similarity: 0 };
+
+        for (const candidate of relevantCandidates) {
+          const candidateSimilarity = candidate.score;
+
+          if (candidateSimilarity >= 0.95) {
+            this.logger.info('High similarity detected, creating new version', {
+              existingMemoryId: candidate.memoryId,
+              similarity: candidateSimilarity,
+            });
+            detection = { isNewVersion: true, existingMemoryId: candidate.memoryId, similarity: candidateSimilarity };
+            break;
+          }
+
+          if (candidateSimilarity >= 0.7 && candidateSimilarity < 0.95) {
+            const inclusionResult = await this.checkSemanticInclusion(enriched.item, enriched.summary, candidate.memoryId);
+
+            if (inclusionResult) {
+              switch (inclusionResult.type) {
+                case 'b_extends_a':
+                  this.logger.info('B extends A, creating new version', { existingMemoryId: candidate.memoryId });
+                  detection = { isNewVersion: true, existingMemoryId: candidate.memoryId, similarity: candidateSimilarity };
+                  break;
+                case 'a_extends_b':
+                  this.logger.info('A extends B, B discarded', { existingMemoryId: candidate.memoryId });
+                  shouldStore = false;
+                  break;
+                case 'identical':
+                  this.logger.info('Memory identical to existing, skipping', { existingMemoryId: candidate.memoryId });
+                  shouldStore = false;
+                  break;
+                case 'overlapping':
+                case 'unrelated':
+                  continue;
+              }
+              if (!shouldStore || detection.isNewVersion) break;
+            }
+          }
+        }
+
+        if (!shouldStore) continue;
+
+        // 版本锁：防止并发创建
+        if (detection.isNewVersion && detection.existingMemoryId) {
+          const lockKey = `version:${detection.existingMemoryId}`;
+          const releaseLock = await this.acquireVersionLock(lockKey);
+
+          if (releaseLock) {
+            try {
+              const recheck = await this.versionManager.detectVersion(enriched.item.content, {
+                agentId: input.agentId, type: enriched.item.type,
+              });
+              if (!recheck.isNewVersion || recheck.existingMemoryId !== detection.existingMemoryId) {
+                this.logger.info('Version already created by concurrent request');
+                detection = recheck;
+              }
+            } finally {
+              releaseLock();
+            }
+          } else {
+            this.logger.warn('Failed to acquire version lock', { existingMemoryId: detection.existingMemoryId });
+            detection = { isNewVersion: false, existingMemoryId: null, similarity: 0 };
+          }
+        }
+
+        // 存储记忆
+        const captured = await this.storeMemory(
+          enriched.item, enriched.summary, scores, input, detection, now,
+          { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+        );
+        result.captured.push(captured);
+      } catch (error) {
+        result.skipped.push({
+          content: enriched.item.content,
+          reason: 'error',
+          details: String(error),
+        });
+      }
+    }
+
+    this.logger.info('Memory capture completed', {
+      captured: result.captured.length,
+      skipped: result.skipped.length,
+    });
+
+    // 5. 自动用户画像分析（异步，不阻塞返回）
+    if (this.profileManager && result.captured.length > 0) {
+      this.analyzeAndUpdateProfile(input, result.captured).catch((err) => {
+        this.logger.warn('Auto profile analysis failed', { error: String(err) });
+      });
+    }
+
     return result;
   }
 
@@ -797,7 +617,7 @@ this.inclusionDetector = new MemoryInclusionDetector();
       });
     } catch (error) {
       this.logger.warn('Failed to auto update profile', {
-        error: String(error),
+        error: error instanceof Error ? error.message : String(error),
         userId,
       });
     }
@@ -986,8 +806,7 @@ this.inclusionDetector = new MemoryInclusionDetector();
 
       return result;
     } catch (error) {
-      this.logger.error('Semantic inclusion check failed', {
-        error: String(error),
+      this.logger.error('Semantic inclusion check failed', error instanceof Error ? error : new Error(String(error)), {
         existingMemoryId,
       });
       return null;

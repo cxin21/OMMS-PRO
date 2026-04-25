@@ -363,7 +363,7 @@ export class GraphRetryQueue {
       await mkdir(dirname(this.queueFilePath), { recursive: true });
       await writeFile(this.queueFilePath, JSON.stringify(this.queue, null, 2), 'utf-8');
     } catch (error) {
-      this.logger.error('Failed to persist retry queue', { error: String(error) });
+      this.logger.error('Failed to persist retry queue', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -375,7 +375,7 @@ export class GraphRetryQueue {
       await mkdir(dirname(this.dlqFilePath), { recursive: true });
       await writeFile(this.dlqFilePath, JSON.stringify(this.dlq, null, 2), 'utf-8');
     } catch (error) {
-      this.logger.error('Failed to persist DLQ', { error: String(error) });
+      this.logger.error('Failed to persist DLQ', error instanceof Error ? error : new Error(String(error)));
     }
   }
 

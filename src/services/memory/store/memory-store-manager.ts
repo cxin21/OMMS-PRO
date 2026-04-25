@@ -664,7 +664,7 @@ export class MemoryStoreManager {
     try {
       await this.txManager.commit(tx.id);
     } catch (error) {
-      this.logger.error('Transaction failed', { memoryId, error: String(error) });
+      this.logger.error('Transaction failed', error instanceof Error ? error : new Error(String(error)), { memoryId });
       throw error;
     }
 
@@ -854,7 +854,7 @@ export class MemoryStoreManager {
     try {
       await this.txManager.commit(tx.id);
     } catch (error) {
-      this.logger.error('Memory update transaction failed', { memoryId, error: String(error) });
+      this.logger.error('Memory update transaction failed', error instanceof Error ? error : new Error(String(error)), { memoryId });
       throw error;
     }
 
@@ -1186,7 +1186,7 @@ export class MemoryStoreManager {
         edgeCount: edges.length,
       });
     } catch (error) {
-      this.logger.error('_addMemoryToGraph failed', { memoryId: memory.uid, error: String(error) });
+      this.logger.error('_addMemoryToGraph failed', error instanceof Error ? error : new Error(String(error)), { memoryId: memory.uid });
       throw error;
     }
   }

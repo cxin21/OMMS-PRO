@@ -9,6 +9,7 @@ import type { ExtractedMemory, MemoryCaptureConfig } from '../../../core/types/m
 import { MemoryType } from '../../../core/types/memory';
 import { createLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
+import { JsonParser } from '../../../shared/utils/json-parser';
 import type { AgentRuntimeContext } from '../../../shared/agents';
 import { AgentType } from '../../../shared/agents';
 import type { IAgentContextProvider } from '../../../shared/agents';
@@ -328,13 +329,14 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
     insights: string[];
     summary: string;
   } {
-    let cleaned = response.trim();
-
-    // 移除可能的 markdown 代码块标记
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-
     try {
-      const parsed = JSON.parse(cleaned);
+      const parsed = this.safeParseJson<{
+        content?: string;
+        keywords?: string[];
+        insights?: string[];
+        summary?: string;
+      }>(response, 'consolidation');
+
       return {
         content: parsed.content || '',
         keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
@@ -343,6 +345,9 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
       };
     } catch {
       // JSON 解析失败，尝试简单处理
+      const cleaned = response.trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '');
       this.logger.warn('consolidateMemories JSON parse failed, using fallback', { response: cleaned.substring(0, 100) });
       return {
         content: cleaned,
@@ -359,14 +364,17 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
 
     // 如果有 JSON 包装，尝试提取 content 字段
     try {
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.content) {
-          cleaned = parsed.content;
-        } else if (parsed.merged || parsed.result || parsed.summary) {
-          cleaned = parsed.merged || parsed.result || parsed.summary;
-        }
+      const parsed = this.safeParseJson<{
+        content?: string;
+        merged?: string;
+        result?: string;
+        summary?: string;
+      }>(response, 'merging');
+
+      if (parsed.content) {
+        cleaned = parsed.content;
+      } else if (parsed.merged || parsed.result || parsed.summary) {
+        cleaned = parsed.merged || parsed.result || parsed.summary || cleaned;
       }
     } catch {
       // 不是 JSON，保持原样
@@ -437,6 +445,75 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
     return this.promptLoader.render('prompts/summary-generation.md', { content });
   }
 
+  /**
+   * 安全解析 LLM 返回的 JSON 响应
+   *
+   * 处理流程：
+   * 1. 移除 markdown 代码块标记
+   * 2. 使用正则提取 JSON 对象/数组
+   * 3. 尝试直接 JSON.parse
+   * 4. 失败时使用 JsonParser.autoFixJson 自动修复后重试
+   * 5. 仍然失败则记录详细错误并抛出
+   *
+   * @param response - LLM 原始响应
+   * @param context - 调用上下文标识（用于日志）
+   * @param extractArray - 是否提取数组（默认 false，提取对象）
+   * @returns 解析后的对象
+   */
+  protected safeParseJson<T>(response: string, context: string, extractArray: boolean = false): T {
+    // 1. 移除 markdown 代码块
+    let cleaned = response.trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '');
+
+    // 2. 提取 JSON
+    let jsonStr: string | null = null;
+    if (extractArray) {
+      const match = cleaned.match(/\[[\s\S]*\]/);
+      jsonStr = match ? match[0] : null;
+    } else {
+      const match = cleaned.match(/\{[\s\S]*\}/);
+      jsonStr = match ? match[0] : null;
+    }
+
+    if (!jsonStr) {
+      this.logger.error(`No JSON found in ${context} response`, {
+        responsePreview: response.substring(0, 500),
+        responseLength: response.length,
+      });
+      throw new Error(`No JSON found in ${context} response`);
+    }
+
+    // 3. 尝试直接解析
+    try {
+      return JSON.parse(jsonStr) as T;
+    } catch (firstError) {
+      // 4. 使用 autoFixJson 自动修复后重试
+      try {
+        const fixed = JsonParser.autoFixJson(jsonStr);
+        if (fixed !== jsonStr) {
+          this.logger.warn(`JSON auto-fixed for ${context}`, {
+            originalLength: jsonStr.length,
+            fixedLength: fixed.length,
+            originalError: String(firstError),
+          });
+        }
+        return JSON.parse(fixed) as T;
+      } catch (secondError) {
+        // 5. 记录详细错误信息后抛出
+        this.logger.error(`JSON parse failed for ${context} after auto-fix`, {
+          error: String(secondError),
+          jsonPreview: jsonStr.substring(0, 500),
+          jsonSuffix: jsonStr.length > 500
+            ? jsonStr.substring(jsonStr.length - 200)
+            : '',
+          responseLength: response.length,
+        });
+        throw secondError;
+      }
+    }
+  }
+
   protected abstract callLLM(prompt: string, system?: string, signal?: AbortSignal): Promise<string>;
 }
 
@@ -475,7 +552,7 @@ export class AnthropicExtractor extends BaseLLMExtractor {
       this.logger.info('extractMemories completed', { textLength: text.length, extractedCount: result.length });
       return result;
     } catch (error) {
-      this.logger.error('Extraction failed', { error: String(error) });
+      this.logger.error('Extraction failed', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -485,7 +562,7 @@ export class AnthropicExtractor extends BaseLLMExtractor {
 
     this.logger.debug('generateSummary called', { contentLength: content.length });
     const response = await this.callWithAgentContext(prompt, AgentType.MEMORY_CAPTURE);
-    const parsed = JSON.parse(response);
+    const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
     const summary = (parsed.summary ?? '').substring(0, 50);
     if (!summary) {
       throw new Error('LLM returned empty summary');
@@ -595,16 +672,15 @@ export class AnthropicExtractor extends BaseLLMExtractor {
   // ============================================================
 
   private parseScoringResponse(response: string): LLMScoringResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON object found in scoring response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse scoring response', { error: error.message });
-      throw error;
-    }
+    const parsed = this.safeParseJson<{
+      importance: number;
+      scope: number;
+      confidence?: number;
+      reasoning?: string;
+    }>(response, 'scoring');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.importance !== 'number' || typeof parsed.scope !== 'number') {
-      throw new Error(`Invalid scoring response: importance or scope is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid scoring response: missing numeric importance/scope`);
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
@@ -619,41 +695,33 @@ export class AnthropicExtractor extends BaseLLMExtractor {
     type: 'person' | 'organization' | 'location' | 'concept' | 'technology' | 'event' | 'other';
     confidence: number;
   }> {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      this.logger.warn('No JSON found in entity extraction response', { response: response.substring(0, 100) });
-      return [];
-    }
-
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = this.safeParseJson<{ entities?: Array<{ name: string; type: string; confidence?: number }> }>(
+        response, 'entity-extraction',
+      );
       if (!parsed.entities || !Array.isArray(parsed.entities)) {
         return [];
       }
 
       const validTypes = ['person', 'organization', 'location', 'concept', 'technology', 'event', 'other'];
       return parsed.entities
-        .filter((e: any) => e.name && e.type)
-        .map((e: any) => ({
+        .filter((e) => e.name && e.type)
+        .map((e) => ({
           name: String(e.name).substring(0, 100),
           type: validTypes.includes(e.type) ? e.type as any : 'other',
           confidence: Math.max(0, Math.min(1, e.confidence ?? 0.5)),
         }));
     } catch (error) {
-      this.logger.error('Failed to parse entity extraction response', { error: String(error) });
+      this.logger.error('Failed to parse entity extraction response', error instanceof Error ? error : new Error(String(error)));
       return [];
     }
   }
 
   private parseFocusResponse(response: string): LLMFocusAnalysisResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in focus response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<{ focusLevel: number; reasoning?: string }>(response, 'focus');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.focusLevel !== 'number') {
-      throw new Error(`Invalid focus response: focusLevel is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid focus response: focusLevel is not a number`);
     }
     return {
       focusLevel: Math.max(0, Math.min(1, parsed.focusLevel)),
@@ -662,111 +730,75 @@ export class AnthropicExtractor extends BaseLLMExtractor {
   }
 
   private parsePersonaExtractionResponse(response: string): any {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in persona extraction response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<any>(response, 'persona-extraction');
+    const now = Date.now();
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const now = Date.now();
-
-      return {
-        name: parsed.name,
-        age: parsed.age,
-        gender: parsed.gender,
-        occupation: parsed.occupation,
-        location: parsed.location,
-        personalityTraits: Array.isArray(parsed.personalityTraits)
-          ? parsed.personalityTraits.map((t: any) => ({
-              trait: t.trait ?? 'unknown',
-              description: t.description ?? '',
-              confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
-              evidence: Array.isArray(t.evidence) ? t.evidence : [],
-              category: this.validatePersonalityCategory(t.category),
-            }))
-          : [],
-        interests: Array.isArray(parsed.interests)
-          ? parsed.interests.map((i: any) => ({
-              name: i.name ?? 'unknown',
-              category: i.category ?? 'general',
-              level: this.validateInterestLevel(i.level),
-              confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
-              firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
-              lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
-              frequency: typeof i.frequency === 'number' ? i.frequency : 1,
-            }))
-          : [],
-        communicationStyle: parsed.communicationStyle ? {
-          formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
-          directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
-          detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
-          tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
-        } : undefined,
-        values: Array.isArray(parsed.values) ? parsed.values : [],
-        goals: Array.isArray(parsed.goals) ? parsed.goals : [],
-        background: parsed.background,
-        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-        sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
-      };
-    } catch (error) {
-      this.logger.error('Failed to parse persona extraction response', { error: String(error), response });
-      throw error;
-    }
+    return {
+      name: parsed.name,
+      age: parsed.age,
+      gender: parsed.gender,
+      occupation: parsed.occupation,
+      location: parsed.location,
+      personalityTraits: Array.isArray(parsed.personalityTraits)
+        ? parsed.personalityTraits.map((t: any) => ({
+            trait: t.trait ?? 'unknown',
+            description: t.description ?? '',
+            confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
+            evidence: Array.isArray(t.evidence) ? t.evidence : [],
+            category: this.validatePersonalityCategory(t.category),
+          }))
+        : [],
+      interests: Array.isArray(parsed.interests)
+        ? parsed.interests.map((i: any) => ({
+            name: i.name ?? 'unknown',
+            category: i.category ?? 'general',
+            level: this.validateInterestLevel(i.level),
+            confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
+            firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
+            lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
+            frequency: typeof i.frequency === 'number' ? i.frequency : 1,
+          }))
+        : [],
+      communicationStyle: parsed.communicationStyle ? {
+        formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
+        directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
+        detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
+        tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
+      } : undefined,
+      values: Array.isArray(parsed.values) ? parsed.values : [],
+      goals: Array.isArray(parsed.goals) ? parsed.goals : [],
+      background: parsed.background,
+      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+      sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
+    };
   }
 
   private parseExtractionResponse(response: string): ExtractedMemory[] {
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON array found in extraction response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse extraction response', { error: error.message });
-      throw error;
-    }
-
     this.logger.info('LLM extraction response', { response: response.substring(0, 1500) });
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        content: string;
-        type: string;
-        confidence: number;
-        keywords: string[];
-        tags: string[];
-        segmentStart?: number;
-        segmentEnd?: number;
-        sourceSegment?: string;
-        topicId?: string;
-      }>;
+    const parsed = this.safeParseJson<Array<{
+      content: string;
+      type: string;
+      confidence: number;
+      keywords: string[];
+      tags: string[];
+      segmentStart?: number;
+      segmentEnd?: number;
+      sourceSegment?: string;
+      topicId?: string;
+    }>>(response, 'extraction', true);
 
-      return parsed.map(item => ({
-        content: item.content,
-        type: this.parseMemoryType(item.type),
-        confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
-        keywords: item.keywords ?? [],
-        tags: item.tags ?? [],
-        segmentStart: item.segmentStart,
-        segmentEnd: item.segmentEnd,
-        sourceSegment: item.sourceSegment,
-        topicId: item.topicId,
-      }));
-    } catch (error) {
-      // 记录完整响应以便调试 JSON 截断问题
-      const fullResponse = response;
-      const jsonStart = response.indexOf('[');
-      const jsonEnd = response.lastIndexOf(']');
-      const truncatedJson = jsonEnd > jsonStart ? response.substring(jsonStart, jsonEnd + 1) : response;
-      this.logger.error('Failed to parse extraction response', {
-        error: String(error),
-        responseLength: fullResponse.length,
-        jsonStart,
-        jsonEnd,
-        truncatedJsonLength: truncatedJson.length,
-        jsonPreview: truncatedJson.substring(0, 500),
-        jsonSuffix: truncatedJson.length > 500 ? truncatedJson.substring(truncatedJson.length - 500) : '',
-        fullResponseForDebug: fullResponse.substring(0, 2000)
-      });
-      throw error;
-    }
+    return parsed.map(item => ({
+      content: item.content,
+      type: this.parseMemoryType(item.type),
+      confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
+      keywords: item.keywords ?? [],
+      tags: item.tags ?? [],
+      segmentStart: item.segmentStart,
+      segmentEnd: item.segmentEnd,
+      sourceSegment: item.sourceSegment,
+      topicId: item.topicId,
+    }));
   }
 
   private parseMemoryType(typeStr: string): MemoryType {
@@ -886,7 +918,7 @@ export class OpenAIExtractor extends BaseLLMExtractor {
       this.logger.info('extractMemories completed', { textLength: text.length, extractedCount: result.length });
       return result;
     } catch (error) {
-      this.logger.error('Extraction failed', { error: String(error) });
+      this.logger.error('Extraction failed', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -896,7 +928,7 @@ export class OpenAIExtractor extends BaseLLMExtractor {
 
     this.logger.debug('generateSummary called', { contentLength: content.length });
     const response = await this.callWithAgentContext(prompt, AgentType.MEMORY_CAPTURE);
-    const parsed = JSON.parse(response);
+    const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
     const summary = (parsed.summary ?? '').substring(0, 50);
     if (!summary) {
       throw new Error('LLM returned empty summary');
@@ -1006,16 +1038,15 @@ export class OpenAIExtractor extends BaseLLMExtractor {
   // ============================================================
 
   private parseScoringResponse(response: string): LLMScoringResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON object found in scoring response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse scoring response', { error: error.message });
-      throw error;
-    }
+    const parsed = this.safeParseJson<{
+      importance: number;
+      scope: number;
+      confidence?: number;
+      reasoning?: string;
+    }>(response, 'scoring');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.importance !== 'number' || typeof parsed.scope !== 'number') {
-      throw new Error(`Invalid scoring response: importance or scope is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid scoring response: missing numeric importance/scope`);
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
@@ -1030,41 +1061,33 @@ export class OpenAIExtractor extends BaseLLMExtractor {
     type: 'person' | 'organization' | 'location' | 'concept' | 'technology' | 'event' | 'other';
     confidence: number;
   }> {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      this.logger.warn('No JSON found in entity extraction response', { response: response.substring(0, 100) });
-      return [];
-    }
-
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = this.safeParseJson<{ entities?: Array<{ name: string; type: string; confidence?: number }> }>(
+        response, 'entity-extraction',
+      );
       if (!parsed.entities || !Array.isArray(parsed.entities)) {
         return [];
       }
 
       const validTypes = ['person', 'organization', 'location', 'concept', 'technology', 'event', 'other'];
       return parsed.entities
-        .filter((e: any) => e.name && e.type)
-        .map((e: any) => ({
+        .filter((e) => e.name && e.type)
+        .map((e) => ({
           name: String(e.name).substring(0, 100),
           type: validTypes.includes(e.type) ? e.type as any : 'other',
           confidence: Math.max(0, Math.min(1, e.confidence ?? 0.5)),
         }));
     } catch (error) {
-      this.logger.error('Failed to parse entity extraction response', { error: String(error) });
+      this.logger.error('Failed to parse entity extraction response', error instanceof Error ? error : new Error(String(error)));
       return [];
     }
   }
 
   private parseFocusResponse(response: string): LLMFocusAnalysisResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in focus response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<{ focusLevel: number; reasoning?: string }>(response, 'focus');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.focusLevel !== 'number') {
-      throw new Error(`Invalid focus response: focusLevel is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid focus response: focusLevel is not a number`);
     }
     return {
       focusLevel: Math.max(0, Math.min(1, parsed.focusLevel)),
@@ -1073,111 +1096,75 @@ export class OpenAIExtractor extends BaseLLMExtractor {
   }
 
   private parsePersonaExtractionResponse(response: string): any {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in persona extraction response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<any>(response, 'persona-extraction');
+    const now = Date.now();
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const now = Date.now();
-
-      return {
-        name: parsed.name,
-        age: parsed.age,
-        gender: parsed.gender,
-        occupation: parsed.occupation,
-        location: parsed.location,
-        personalityTraits: Array.isArray(parsed.personalityTraits)
-          ? parsed.personalityTraits.map((t: any) => ({
-              trait: t.trait ?? 'unknown',
-              description: t.description ?? '',
-              confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
-              evidence: Array.isArray(t.evidence) ? t.evidence : [],
-              category: this.validatePersonalityCategory(t.category),
-            }))
-          : [],
-        interests: Array.isArray(parsed.interests)
-          ? parsed.interests.map((i: any) => ({
-              name: i.name ?? 'unknown',
-              category: i.category ?? 'general',
-              level: this.validateInterestLevel(i.level),
-              confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
-              firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
-              lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
-              frequency: typeof i.frequency === 'number' ? i.frequency : 1,
-            }))
-          : [],
-        communicationStyle: parsed.communicationStyle ? {
-          formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
-          directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
-          detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
-          tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
-        } : undefined,
-        values: Array.isArray(parsed.values) ? parsed.values : [],
-        goals: Array.isArray(parsed.goals) ? parsed.goals : [],
-        background: parsed.background,
-        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-        sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
-      };
-    } catch (error) {
-      this.logger.error('Failed to parse persona extraction response', { error: String(error), response });
-      throw error;
-    }
+    return {
+      name: parsed.name,
+      age: parsed.age,
+      gender: parsed.gender,
+      occupation: parsed.occupation,
+      location: parsed.location,
+      personalityTraits: Array.isArray(parsed.personalityTraits)
+        ? parsed.personalityTraits.map((t: any) => ({
+            trait: t.trait ?? 'unknown',
+            description: t.description ?? '',
+            confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
+            evidence: Array.isArray(t.evidence) ? t.evidence : [],
+            category: this.validatePersonalityCategory(t.category),
+          }))
+        : [],
+      interests: Array.isArray(parsed.interests)
+        ? parsed.interests.map((i: any) => ({
+            name: i.name ?? 'unknown',
+            category: i.category ?? 'general',
+            level: this.validateInterestLevel(i.level),
+            confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
+            firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
+            lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
+            frequency: typeof i.frequency === 'number' ? i.frequency : 1,
+          }))
+        : [],
+      communicationStyle: parsed.communicationStyle ? {
+        formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
+        directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
+        detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
+        tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
+      } : undefined,
+      values: Array.isArray(parsed.values) ? parsed.values : [],
+      goals: Array.isArray(parsed.goals) ? parsed.goals : [],
+      background: parsed.background,
+      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+      sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
+    };
   }
 
   private parseExtractionResponse(response: string): ExtractedMemory[] {
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON array found in extraction response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse extraction response', { error: error.message });
-      throw error;
-    }
-
     this.logger.info('LLM extraction response', { response: response.substring(0, 1500) });
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        content: string;
-        type: string;
-        confidence: number;
-        keywords: string[];
-        tags: string[];
-        segmentStart?: number;
-        segmentEnd?: number;
-        sourceSegment?: string;
-        topicId?: string;
-      }>;
+    const parsed = this.safeParseJson<Array<{
+      content: string;
+      type: string;
+      confidence: number;
+      keywords: string[];
+      tags: string[];
+      segmentStart?: number;
+      segmentEnd?: number;
+      sourceSegment?: string;
+      topicId?: string;
+    }>>(response, 'extraction', true);
 
-      return parsed.map(item => ({
-        content: item.content,
-        type: this.parseMemoryType(item.type),
-        confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
-        keywords: item.keywords ?? [],
-        tags: item.tags ?? [],
-        segmentStart: item.segmentStart,
-        segmentEnd: item.segmentEnd,
-        sourceSegment: item.sourceSegment,
-        topicId: item.topicId,
-      }));
-    } catch (error) {
-      // 记录完整响应以便调试 JSON 截断问题
-      const fullResponse = response;
-      const jsonStart = response.indexOf('[');
-      const jsonEnd = response.lastIndexOf(']');
-      const truncatedJson = jsonEnd > jsonStart ? response.substring(jsonStart, jsonEnd + 1) : response;
-      this.logger.error('Failed to parse extraction response', {
-        error: String(error),
-        responseLength: fullResponse.length,
-        jsonStart,
-        jsonEnd,
-        truncatedJsonLength: truncatedJson.length,
-        jsonPreview: truncatedJson.substring(0, 500),
-        jsonSuffix: truncatedJson.length > 500 ? truncatedJson.substring(truncatedJson.length - 500) : '',
-        fullResponseForDebug: fullResponse.substring(0, 2000)
-      });
-      throw error;
-    }
+    return parsed.map(item => ({
+      content: item.content,
+      type: this.parseMemoryType(item.type),
+      confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
+      keywords: item.keywords ?? [],
+      tags: item.tags ?? [],
+      segmentStart: item.segmentStart,
+      segmentEnd: item.segmentEnd,
+      sourceSegment: item.sourceSegment,
+      topicId: item.topicId,
+    }));
   }
 
   private parseMemoryType(typeStr: string): MemoryType {
@@ -1286,7 +1273,7 @@ export class CustomExtractor extends BaseLLMExtractor {
       this.logger.debug('LLM raw response', { response: response.substring(0, 1000) });
       return this.parseExtractionResponse(response);
     } catch (error) {
-      this.logger.error('Extraction failed', { error: String(error) });
+      this.logger.error('Extraction failed', error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -1296,7 +1283,7 @@ export class CustomExtractor extends BaseLLMExtractor {
     const prompt = this.buildSummaryPrompt(content);
 
     const response = await this.callLLM(prompt);
-    const parsed = JSON.parse(response);
+    const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
     const summary = (parsed.summary ?? '').substring(0, 50);
     if (!summary) {
       throw new Error('LLM returned empty summary');
@@ -1321,7 +1308,7 @@ export class CustomExtractor extends BaseLLMExtractor {
       });
       return result;
     } catch (error) {
-      this.logger.error('generateScores failed', { error: String(error), contentLength: content.length });
+      this.logger.error('generateScores failed', error instanceof Error ? error : new Error(String(error)), { contentLength: content.length });
       // Fallback to default scores if LLM fails - throw instead of returning defaults
       // This ensures memories aren't stored with meaningless default scores
       throw error;
@@ -1414,16 +1401,15 @@ export class CustomExtractor extends BaseLLMExtractor {
   // ============================================================
 
   private parseScoringResponse(response: string): LLMScoringResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON object found in scoring response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse scoring response', { error: error.message });
-      throw error;
-    }
+    const parsed = this.safeParseJson<{
+      importance: number;
+      scope: number;
+      confidence?: number;
+      reasoning?: string;
+    }>(response, 'scoring');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.importance !== 'number' || typeof parsed.scope !== 'number') {
-      throw new Error(`Invalid scoring response: importance or scope is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid scoring response: missing numeric importance/scope`);
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
@@ -1438,41 +1424,33 @@ export class CustomExtractor extends BaseLLMExtractor {
     type: 'person' | 'organization' | 'location' | 'concept' | 'technology' | 'event' | 'other';
     confidence: number;
   }> {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      this.logger.warn('No JSON found in entity extraction response', { response: response.substring(0, 100) });
-      return [];
-    }
-
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = this.safeParseJson<{ entities?: Array<{ name: string; type: string; confidence?: number }> }>(
+        response, 'entity-extraction',
+      );
       if (!parsed.entities || !Array.isArray(parsed.entities)) {
         return [];
       }
 
       const validTypes = ['person', 'organization', 'location', 'concept', 'technology', 'event', 'other'];
       return parsed.entities
-        .filter((e: any) => e.name && e.type)
-        .map((e: any) => ({
+        .filter((e) => e.name && e.type)
+        .map((e) => ({
           name: String(e.name).substring(0, 100),
           type: validTypes.includes(e.type) ? e.type as any : 'other',
           confidence: Math.max(0, Math.min(1, e.confidence ?? 0.5)),
         }));
     } catch (error) {
-      this.logger.error('Failed to parse entity extraction response', { error: String(error) });
+      this.logger.error('Failed to parse entity extraction response', error instanceof Error ? error : new Error(String(error)));
       return [];
     }
   }
 
   private parseFocusResponse(response: string): LLMFocusAnalysisResult {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in focus response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<{ focusLevel: number; reasoning?: string }>(response, 'focus');
 
-    const parsed = JSON.parse(jsonMatch[0]);
     if (typeof parsed.focusLevel !== 'number') {
-      throw new Error(`Invalid focus response: focusLevel is not a number: ${response.substring(0, 100)}`);
+      throw new Error(`Invalid focus response: focusLevel is not a number`);
     }
     return {
       focusLevel: Math.max(0, Math.min(1, parsed.focusLevel)),
@@ -1481,111 +1459,75 @@ export class CustomExtractor extends BaseLLMExtractor {
   }
 
   private parsePersonaExtractionResponse(response: string): any {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`No JSON object found in persona extraction response: ${response.substring(0, 100)}`);
-    }
+    const parsed = this.safeParseJson<any>(response, 'persona-extraction');
+    const now = Date.now();
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const now = Date.now();
-
-      return {
-        name: parsed.name,
-        age: parsed.age,
-        gender: parsed.gender,
-        occupation: parsed.occupation,
-        location: parsed.location,
-        personalityTraits: Array.isArray(parsed.personalityTraits)
-          ? parsed.personalityTraits.map((t: any) => ({
-              trait: t.trait ?? 'unknown',
-              description: t.description ?? '',
-              confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
-              evidence: Array.isArray(t.evidence) ? t.evidence : [],
-              category: this.validatePersonalityCategory(t.category),
-            }))
-          : [],
-        interests: Array.isArray(parsed.interests)
-          ? parsed.interests.map((i: any) => ({
-              name: i.name ?? 'unknown',
-              category: i.category ?? 'general',
-              level: this.validateInterestLevel(i.level),
-              confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
-              firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
-              lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
-              frequency: typeof i.frequency === 'number' ? i.frequency : 1,
-            }))
-          : [],
-        communicationStyle: parsed.communicationStyle ? {
-          formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
-          directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
-          detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
-          tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
-        } : undefined,
-        values: Array.isArray(parsed.values) ? parsed.values : [],
-        goals: Array.isArray(parsed.goals) ? parsed.goals : [],
-        background: parsed.background,
-        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-        sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
-      };
-    } catch (error) {
-      this.logger.error('Failed to parse persona extraction response', { error: String(error), response });
-      throw error;
-    }
+    return {
+      name: parsed.name,
+      age: parsed.age,
+      gender: parsed.gender,
+      occupation: parsed.occupation,
+      location: parsed.location,
+      personalityTraits: Array.isArray(parsed.personalityTraits)
+        ? parsed.personalityTraits.map((t: any) => ({
+            trait: t.trait ?? 'unknown',
+            description: t.description ?? '',
+            confidence: typeof t.confidence === 'number' ? t.confidence : 0.5,
+            evidence: Array.isArray(t.evidence) ? t.evidence : [],
+            category: this.validatePersonalityCategory(t.category),
+          }))
+        : [],
+      interests: Array.isArray(parsed.interests)
+        ? parsed.interests.map((i: any) => ({
+            name: i.name ?? 'unknown',
+            category: i.category ?? 'general',
+            level: this.validateInterestLevel(i.level),
+            confidence: typeof i.confidence === 'number' ? i.confidence : 0.5,
+            firstObserved: typeof i.firstObserved === 'number' ? i.firstObserved : now,
+            lastObserved: typeof i.lastObserved === 'number' ? i.lastObserved : now,
+            frequency: typeof i.frequency === 'number' ? i.frequency : 1,
+          }))
+        : [],
+      communicationStyle: parsed.communicationStyle ? {
+        formality: this.validateFormalityLevel(parsed.communicationStyle.formality),
+        directness: this.validateDirectnessLevel(parsed.communicationStyle.directness),
+        detailPreference: this.validateDetailLevel(parsed.communicationStyle.detailPreference),
+        tone: Array.isArray(parsed.communicationStyle.tone) ? parsed.communicationStyle.tone : [],
+      } : undefined,
+      values: Array.isArray(parsed.values) ? parsed.values : [],
+      goals: Array.isArray(parsed.goals) ? parsed.goals : [],
+      background: parsed.background,
+      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+      sources: Array.isArray(parsed.sources) ? parsed.sources : ['conversation'],
+    };
   }
 
   private parseExtractionResponse(response: string): ExtractedMemory[] {
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      const error = new Error(`No JSON array found in extraction response: ${response.substring(0, 100)}`);
-      this.logger.error('Failed to parse extraction response', { error: error.message });
-      throw error;
-    }
-
     this.logger.info('LLM extraction response', { response: response.substring(0, 1500) });
 
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        content: string;
-        type: string;
-        confidence: number;
-        keywords: string[];
-        tags: string[];
-        segmentStart?: number;
-        segmentEnd?: number;
-        sourceSegment?: string;
-        topicId?: string;
-      }>;
+    const parsed = this.safeParseJson<Array<{
+      content: string;
+      type: string;
+      confidence: number;
+      keywords: string[];
+      tags: string[];
+      segmentStart?: number;
+      segmentEnd?: number;
+      sourceSegment?: string;
+      topicId?: string;
+    }>>(response, 'extraction', true);
 
-      return parsed.map(item => ({
-        content: item.content,
-        type: this.parseMemoryType(item.type),
-        confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
-        keywords: item.keywords ?? [],
-        tags: item.tags ?? [],
-        segmentStart: item.segmentStart,
-        segmentEnd: item.segmentEnd,
-        sourceSegment: item.sourceSegment,
-        topicId: item.topicId,
-      }));
-    } catch (error) {
-      // 记录完整响应以便调试 JSON 截断问题
-      const fullResponse = response;
-      const jsonStart = response.indexOf('[');
-      const jsonEnd = response.lastIndexOf(']');
-      const truncatedJson = jsonEnd > jsonStart ? response.substring(jsonStart, jsonEnd + 1) : response;
-      this.logger.error('Failed to parse extraction response', {
-        error: String(error),
-        responseLength: fullResponse.length,
-        jsonStart,
-        jsonEnd,
-        truncatedJsonLength: truncatedJson.length,
-        jsonPreview: truncatedJson.substring(0, 500),
-        jsonSuffix: truncatedJson.length > 500 ? truncatedJson.substring(truncatedJson.length - 500) : '',
-        fullResponseForDebug: fullResponse.substring(0, 2000)
-      });
-      throw error;
-    }
+    return parsed.map(item => ({
+      content: item.content,
+      type: this.parseMemoryType(item.type),
+      confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
+      keywords: item.keywords ?? [],
+      tags: item.tags ?? [],
+      segmentStart: item.segmentStart,
+      segmentEnd: item.segmentEnd,
+      sourceSegment: item.sourceSegment,
+      topicId: item.topicId,
+    }));
   }
 
   private parseMemoryType(typeStr: string): MemoryType {

@@ -106,7 +106,7 @@ export class MemoryInclusionDetector {
 
       return result;
     } catch (error) {
-      this.logger.error('detectInclusion failed', { error: String(error) });
+      this.logger.error('detectInclusion failed', error instanceof Error ? error : new Error(String(error)));
       // 出错时默认返回 unrelated，让两条记忆独立存储
       return {
         type: 'unrelated',

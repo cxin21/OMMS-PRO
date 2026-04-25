@@ -247,7 +247,7 @@ export class JsonParser {
    * @param input - 原始输入
    * @returns 修复后的输入
    */
-  private static autoFixJson(input: string): string {
+  public static autoFixJson(input: string): string {
     let fixed = input.trim();
 
     // 修复未闭合的引号

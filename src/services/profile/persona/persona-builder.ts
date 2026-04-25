@@ -329,7 +329,7 @@ export class PersonaBuilder {
 
       return result;
     } catch (error) {
-      this.logger.error('Failed to parse LLM response, using basic extraction', { error: String(error) });
+      this.logger.error('Failed to parse LLM response, using basic extraction', error instanceof Error ? error : new Error(String(error)));
       return this.basicExtraction(turns);
     }
   }

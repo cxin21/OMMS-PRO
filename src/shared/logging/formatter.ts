@@ -55,11 +55,26 @@ export class JsonFormatter implements ILogFormatter {
     }
     
     if (data instanceof Error) {
-      return {
+      const result: Record<string, unknown> = {
         name: data.name,
         message: data.message,
         stack: data.stack,
       };
+      // 提取 cause 链
+      let cause = (data as any).cause;
+      if (cause) {
+        const causeChain: Array<{ name: string; message: string; stack?: string }> = [];
+        while (cause) {
+          causeChain.push({
+            name: cause.name ?? 'Unknown',
+            message: cause.message ?? String(cause),
+            stack: cause.stack,
+          });
+          cause = cause.cause;
+        }
+        result['causeChain'] = causeChain;
+      }
+      return result;
     }
     
     if (Array.isArray(data)) {
@@ -103,38 +118,50 @@ export class TextFormatter implements ILogFormatter {
    */
   format(entry: LogEntry): string {
     const parts: string[] = [];
-    
+
     // 时间戳
     if (entry.timestamp) {
       parts.push(this.formatTimestamp(entry.timestamp));
     }
-    
+
     // 日志级别
     parts.push(this.formatLevel(entry.level));
-    
+
     // 模块名
     if (entry.module) {
       parts.push(this.formatModule(entry.module));
     }
-    
+
     // 消息
     parts.push(this.formatMessage(entry.message));
-    
-    // 错误信息
+
+    // 错误信息（含堆栈）
     if (entry.error) {
       parts.push(this.formatError(entry.error));
     }
-    
-    // 附加数据
+
+    // 附加数据（排除已单独渲染的 stack 字段）
     if (entry.data && Object.keys(entry.data).length > 0) {
-      parts.push(this.formatData(entry.data));
+      const { stack, causeChain, ...rest } = entry.data as any;
+      // 渲染堆栈（如果 data 中有 stack 且 entry.error 没有）
+      if (stack && !entry.error) {
+        parts.push(this.formatStack(stack));
+      }
+      // 渲染 cause 链
+      if (causeChain && Array.isArray(causeChain)) {
+        parts.push(this.formatCauseChain(causeChain));
+      }
+      // 渲染其余数据
+      if (Object.keys(rest).length > 0) {
+        parts.push(this.formatData(rest));
+      }
     }
-    
+
     // 上下文
     if (entry.context && Object.keys(entry.context).length > 0) {
       parts.push(this.formatContext(entry.context));
     }
-    
+
     return parts.join(' ');
   }
   
@@ -171,11 +198,52 @@ export class TextFormatter implements ILogFormatter {
   }
   
   /**
-   * 格式化错误
+   * 格式化错误（含堆栈）
    */
   private formatError(error: Error): string {
-    const errorStr = `Error: ${error.message}`;
-    return this.colorize(errorStr, '\x1b[31m');
+    const parts: string[] = [];
+    parts.push(this.colorize(`Error: ${error.name}: ${error.message}`, '\x1b[31m'));
+
+    // 输出堆栈（跳过第一行，因为已经是 error.message）
+    if (error.stack) {
+      const stackLines = error.stack.split('\n').slice(1); // 跳过 "ErrorName: message" 行
+      for (const line of stackLines) {
+        parts.push(this.colorize(`  ${line.trim()}`, '\x1b[90m'));
+      }
+    }
+
+    return parts.join('\n');
+  }
+
+  /**
+   * 格式化堆栈（来自 data.stack）
+   */
+  private formatStack(stack: string): string {
+    const lines = stack.split('\n');
+    const parts: string[] = [];
+    for (const line of lines) {
+      parts.push(this.colorize(`  ${line.trim()}`, '\x1b[90m'));
+    }
+    return parts.join('\n');
+  }
+
+  /**
+   * 格式化 cause 链
+   */
+  private formatCauseChain(causeChain: Array<{ name: string; message: string; stack?: string }>): string {
+    const parts: string[] = [];
+    for (let i = 0; i < causeChain.length; i++) {
+      const cause = causeChain[i];
+      const prefix = i === 0 ? 'Caused by' : `  Caused by [${i}]`;
+      parts.push(this.colorize(`${prefix}: ${cause.name}: ${cause.message}`, '\x1b[33m'));
+      if (cause.stack) {
+        const stackLines = cause.stack.split('\n').slice(1);
+        for (const line of stackLines) {
+          parts.push(this.colorize(`    ${line.trim()}`, '\x1b[90m'));
+        }
+      }
+    }
+    return parts.join('\n');
   }
   
   /**

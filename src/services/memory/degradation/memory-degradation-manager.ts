@@ -264,7 +264,7 @@ export class MemoryDegradationManager {
         await this.runForgettingCycle();
         await this.runScopeDegradationCycle();
       } catch (error) {
-        this.logger.error('Degradation cycle failed', { error: String(error) });
+        this.logger.error('Degradation cycle failed', error instanceof Error ? error : new Error(String(error)));
       }
     }, this.config.checkInterval);
 
@@ -378,7 +378,7 @@ export class MemoryDegradationManager {
           }
         } catch (error) {
           // [runForgettingCycle:463] 捕获错误
-          this.logger.error('[runForgettingCycle:463] Error processing memory', { uid: memory.uid, error: String(error) });
+          this.logger.error('[runForgettingCycle:463] Error processing memory', error instanceof Error ? error : new Error(String(error)), { uid: memory.uid });
           report.errors.push({
             uid: memory.uid,
             error: String(error),
@@ -923,7 +923,7 @@ export class MemoryDegradationManager {
         releaseLock();
       }
     } catch (error) {
-      this.logger.error('Scope downgrade failed', { uid, error: String(error) });
+      this.logger.error('Scope downgrade failed', error instanceof Error ? error : new Error(String(error)), { uid });
       throw error;
     }
   }
@@ -1072,7 +1072,7 @@ export class MemoryDegradationManager {
         releaseLock();
       }
     } catch (error) {
-      this.logger.error('Scope upgrade failed', { uid, error: String(error) });
+      this.logger.error('Scope upgrade failed', error instanceof Error ? error : new Error(String(error)), { uid });
       throw error;
     }
   }
@@ -1286,7 +1286,7 @@ export class MemoryDegradationManager {
 
       this.logger.info('Memory archived', { uid, oldPalaceRef, archivePalaceRef });
     } catch (error) {
-      this.logger.error('Archive transaction failed, rolling back', { uid, error: String(error) });
+      this.logger.error('Archive transaction failed, rolling back', error instanceof Error ? error : new Error(String(error)), { uid });
 
       // Determine if transaction still exists and needs rollback
       // Note: prepare() may have already rolled back and deleted the transaction
@@ -1565,7 +1565,7 @@ export class MemoryDegradationManager {
 
       this.logger.info('Memory restored from archive', { uid, originalPalaceRef });
     } catch (error) {
-      this.logger.error('Restore transaction failed, rolling back', { uid, error: String(error) });
+      this.logger.error('Restore transaction failed, rolling back', error instanceof Error ? error : new Error(String(error)), { uid });
 
       // 回滚事务
       const rollbackResult = await this.txManager.rollback(tx!.id);
@@ -1677,7 +1677,7 @@ export class MemoryDegradationManager {
       await this.graphStore.addMemory(memoryUid, entities, edges);
       this.logger.debug('Memory graph rebuilt', { uid: memoryUid, entityCount: entities.length, edgeCount: edges.length });
     } catch (error) {
-      this.logger.error('Failed to rebuild memory graph', { uid: memoryUid, error: String(error) });
+      this.logger.error('Failed to rebuild memory graph', error instanceof Error ? error : new Error(String(error)), { uid: memoryUid });
       // 不抛出错误，避免影响恢复流程
     }
   }
@@ -1803,7 +1803,7 @@ export class MemoryDegradationManager {
       try {
         await this.txManager.commit(tx.id);
       } catch (error) {
-        this.logger.error('Memory deletion transaction failed', { uid, error: String(error) });
+        this.logger.error('Memory deletion transaction failed', error instanceof Error ? error : new Error(String(error)), { uid });
         throw error;
       } finally {
         // 释放操作锁
@@ -1817,7 +1817,7 @@ export class MemoryDegradationManager {
       });
     } catch (error) {
       // 外层捕获：确保锁释放
-      this.logger.error('Memory deletion failed', { uid, error: String(error) });
+      this.logger.error('Memory deletion failed', error instanceof Error ? error : new Error(String(error)), { uid });
       releaseLock();
       throw error;
     }
