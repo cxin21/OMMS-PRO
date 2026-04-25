@@ -1,0 +1,81 @@
+{
+  "id": "omms-pro-claude-plugin",
+  "name": "OMMS-PRO Memory System",
+  "version": "1.0.0",
+  "description": "OMMS-PRO memory system integration for Claude Code - enables cross-session memory recall and capture",
+  "author": "OMMS Team",
+  "type": "claude",
+  "entry": "server/index.ts",
+  "configFields": [
+    {
+      "key": "apiUrl",
+      "type": "string",
+      "default": "http://localhost:3000/api/v1",
+      "description": "OMMS-PRO API URL"
+    },
+    {
+      "key": "agentId",
+      "type": "string",
+      "default": "claude-code",
+      "description": "Agent identifier for this Claude instance"
+    },
+    {
+      "key": "enableHooks",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable Claude hooks for automatic memory operations"
+    },
+    {
+      "key": "enableSkills",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable Claude skills"
+    }
+  ],
+  "hooks": [
+    {
+      "name": "init-session",
+      "event": "SessionStart",
+      "priority": 100,
+      "description": "Initialize session and output L0/L1 user context"
+    },
+    {
+      "name": "recall-memory",
+      "event": "UserPromptSubmit",
+      "priority": 50,
+      "description": "Recall relevant memories before generating response"
+    },
+    {
+      "name": "capture-session",
+      "event": "SessionEnd",
+      "priority": 100,
+      "description": "Final memory capture at session end"
+    }
+  ],
+  "tools": [
+    {
+      "name": "memory_recall",
+      "description": "Recall relevant memories from OMMS-PRO memory system based on semantic similarity"
+    },
+    {
+      "name": "memory_capture",
+      "description": "Capture the current conversation as a memory in OMMS-PRO"
+    },
+    {
+      "name": "memory_list",
+      "description": "List all memories in the OMMS-PRO system with optional filtering"
+    },
+    {
+      "name": "profile_get",
+      "description": "Get the user profile including L0 identity and L1 preferences"
+    },
+    {
+      "name": "omms_record_context",
+      "description": "Record user/assistant conversation to local JSONL file (MANDATORY after each response)"
+    },
+    {
+      "name": "omms_capture_session",
+      "description": "Capture full conversation memory at session end"
+    }
+  ]
+}

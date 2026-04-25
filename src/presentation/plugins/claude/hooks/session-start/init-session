@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# SessionStart Hook: Initialize session and output L0/L1 user context
+# 执行时机: Claude Code 会话开始时
+#
+# 环境变量:
+#   OMMS_API_URL: OMMS API 端点 (默认: http://localhost:3000/api/v1)
+#   OMMS_AGENT_ID: Agent 标识符
+#   OMMS_SESSION_ID: 会话标识符
+#   CLAUDE_PROJECT_DIR: 当前项目目录
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+OMMS_API_PORT="${OMMS_API_PORT:-3000}"
+OMMS_API_URL="${OMMS_API_URL:-http://localhost:${OMMS_API_PORT}/api/v1}"
+AGENT_ID="${OMMS_AGENT_ID:-claude-code}"
+SESSION_ID="${OMMS_SESSION_ID:-session-$(date +%s)}"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-/tmp}"
+
+# 日志函数
+log() {
+    local level="${1:-info}"
+    local message="${2:-}"
+    local data="${3:-}"
+    node -e "
+const url = '${OMMS_API_URL}/system/logs/write';
+const payload = JSON.stringify({level:'${level}', message:'${message}', module:'omms-plugin-session-start', data:${data}});
+fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:payload})
+  .then(r=>r.json())
+  .then(d=>{ if(!d.success) console.error('log failed:', d.error); })
+  .catch(e=>{ /* silent fail */ });
+" > /dev/null 2>&1 || true
+}
+
+# 主逻辑
+main() {
+    log "info" "=== SESSION START ===" "{\"agentId\":\"${AGENT_ID}\",\"sessionId\":\"${SESSION_ID}\",\"projectDir\":\"${PROJECT_DIR}\"}"
+
+    # 调用 API 获取 L0/L1 上下文 (使用 node fetch)
+    local context_result
+    context_result=$(node -e "
+const url = '${OMMS_API_URL}/profile/${AGENT_ID}/context?sessionId=${SESSION_ID}';
+fetch(url)
+  .then(r=>r.json())
+  .then(d=>console.log(JSON.stringify(d)))
+  .catch(e=>console.log('{}'));
+" 2>/dev/null) || context_result="{}"
+
+    log "debug" "L0/L1 context API response" "{\"response\":${context_result}}"
+
+    # 解析上下文
+    local user_name=$(echo "$context_result" | node -e "try { const d=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(d.data?.userName || d.data?.name || 'User'); } catch(e) { console.log('User'); }" 2>/dev/null)
+    local l0_context=$(echo "$context_result" | node -e "try { const d=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(JSON.stringify(d.data?.l0 || {})); } catch(e) { console.log('{}'); }" 2>/dev/null)
+    local l1_context=$(echo "$context_result" | node -e "try { const d=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(JSON.stringify(d.data?.l1 || {})); } catch(e) { console.log('{}'); }" 2>/dev/null)
+
+    # 输出 OMMS 上下文块 (Claude Code 会将其注入到上下文中)
+    echo ""
+    echo "<OMMS_PRO_SESSION>"
+    echo "## Session Initialized"
+    echo "Agent ID: ${AGENT_ID}"
+    echo "Session ID: ${SESSION_ID}"
+    echo ""
+    echo "## L0/L1 User Profile Context"
+    echo "$l0_context" | node -e "
+const fs = require('fs');
+const data = JSON.parse(fs.readFileSync(0, 'utf8'));
+console.log('### L0: Identity');
+if (data.name) console.log('- Name: ' + data.name);
+if (data.language) console.log('- Language: ' + data.language);
+" 2>/dev/null || true
+    echo "$l1_context" | node -e "
+const fs = require('fs');
+const data = JSON.parse(fs.readFileSync(0, 'utf8'));
+console.log('### L1: Preferences');
+if (data.topics) console.log('- Topics: ' + data.topics.join(', '));
+if (data.engagementLevel) console.log('- Engagement: ' + data.engagementLevel);
+if (data.totalInteractions) console.log('- Total Interactions: ' + data.totalInteractions);
+" 2>/dev/null || true
+    echo ""
+    echo "## Relevant Memories"
+    echo "Use memory_recall tool to get more context when needed."
+    echo "Use omms_record_context after responding to save important information."
+    echo "</OMMS_PRO_SESSION>"
+    echo ""
+
+    log "info" "=== SESSION START END ===" "{\"agentId\":\"${AGENT_ID}\",\"sessionId\":\"${SESSION_ID}\"}"
+    exit 0
+}
+
+main

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>记忆星图</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #00000a; overflow: hidden; font-family: -apple-system, sans-serif; }
+    .ui { position: fixed; z-index: 10; user-select: none; color: #c8d0e8; pointer-events: none; }
+    .title { top: 14px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; font-weight: 300; letter-spacing: 0.5em; color: #5a6a9a; }
+    .stats { top: 14px; right: 14px; font-size: 0.65rem; color: rgba(200,208,232,0.35); text-align: right; }
+    .stats span { color: rgba(200,208,232,0.8); }
+    .hint { bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 0.58rem; color: rgba(255,255,255,0.2); }
+    .filters { bottom: 14px; left: 14px; display: flex; flex-direction: column; gap: 3px; pointer-events: all; }
+    .filter-btn { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-radius: 5px; padding: 4px 10px; color: rgba(255,255,255,0.4); font-size: 0.6rem; cursor: pointer; text-align: left; }
+    .filter-btn:hover { background: rgba(255,255,255,0.09); color: #fff; }
+    .filter-btn.active { background: rgba(60,100,180,0.25); border-color: rgba(60,100,180,0.5); color: #fff; }
+    .filter-btn .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; }
+    .panel { position: fixed; top: 50%; right: 14px; transform: translateY(-50%); width: 200px; background: rgba(8,8,18,0.96); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 14px; display: none; z-index: 20; }
+    .panel.visible { display: block; }
+    .panel .type { display: inline-block; padding: 2px 9px; border-radius: 8px; font-size: 0.58rem; margin-bottom: 7px; }
+    .panel h3 { font-size: 0.82rem; color: #fff; margin-bottom: 5px; font-weight: 500; }
+    .panel p { font-size: 0.68rem; color: rgba(255,255,255,0.4); line-height: 1.4; }
+    .panel .meta { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 4px; }
+    .panel .meta span { font-size: 0.55rem; padding: 2px 6px; background: rgba(255,255,255,0.05); border-radius: 4px; color: rgba(255,255,255,0.35); }
+    .panel .uid { margin-top: 7px; font-size: 0.55rem; color: rgba(255,255,255,0.2); }
+  </style>
+</head>
+<body>
+  <div id="graph" style="width:100vw;height:100vh"></div>
+  <div class="ui title">记忆星图</div>
+  <div class="ui stats"><span id="cnt">0</span> 个记忆 · <span id="con">0</span> 条关联</div>
+  <div class="ui filters" id="flt"></div>
+  <div class="ui hint">拖拽移动节点 · 滚轮缩放 · 点击选中</div>
+  <div class="panel" id="pnl">
+    <span class="type" id="pT"></span>
+    <h3 id="pTi"></h3>
+    <p id="pSu"></p>
+    <div class="meta" id="pMe"></div>
+    <div class="uid" id="pU"></div>
+  </div>
+
+  <script type="module">
+    import ForceGraph from 'https://esm.sh/force-graph@1.51.2';
+
+    const T = {
+      fact:       { label: '事实',  color: '#5b8def' },
+      event:      { label: '事件',  color: '#34d399' },
+      decision:   { label: '决策',  color: '#fbbf24' },
+      identity:   { label: '身份',  color: '#f472b6' },
+      error:      { label: '错误',  color: '#f87171' },
+      learning:   { label: '学习',  color: '#a78bfa' },
+      preference: { label: '偏好',  color: '#fb923c' },
+      persona:    { label: '人格',  color: '#a3e635' },
+    };
+
+    const DATA = [
+      { uid: '1', type: 'identity', label: '张三·前端工程师', summary: '用户名为张三，在互联网公司工作，职位是前端工程师', importance: 8, tags: ['开发者', '北京'] },
+      { uid: '2', type: 'preference', label: '浅色主题偏好', summary: '用户喜欢在周末使用浅色主题，认为更护眼', importance: 6, tags: ['UI', '主题'] },
+      {uid: '3', type: 'decision', label: '使用PostgreSQL', summary: '团队讨论决定使用PostgreSQL替代MySQL', importance: 7, tags: ['数据库', '选型'] },
+      { uid: '4', type: 'error', label: 'API响应慢', summary: 'API响应时间需要优化，平均在500ms以上', importance: 7, tags: ['性能', 'API'] },
+      { uid: '5', type: 'fact', label: 'TypeScript开发', summary: '项目使用TypeScript进行开发', importance: 5, tags: ['技术栈'] },
+      { uid: '6', type: 'event', label: '版本发布', summary: '计划在下周发布新版本', importance: 6, tags: ['发布'] },
+      { uid: '7', type: 'identity', label: '高级开发者账号', summary: '张三的账号已升级为高级开发者', importance: 7, tags: ['账号'] },
+      { uid: '8', type: 'preference', label: '深色主题', summary: '用户设置了深色主题作为默认', importance: 7, tags: ['UI', '主题'] },
+      { uid: '9', type: 'error', label: '500错误', summary: '用户报告API有时返回500错误', importance: 8, tags: ['API', 'bug'] },
+      { uid: '10', type: 'decision', label: '主题切换记忆', summary: '主题切换功能需要记住用户的选择', importance: 5, tags: ['功能'] },
+      { uid: '11', type: 'learning', label: 'React技术栈', summary: '用户张三的技术栈：React, TypeScript', importance: 6, tags: ['技术栈'] },
+      { uid: '12', type: 'event', label: '自动主题切换', summary: '新功能：自动根据时间切换主题', importance: 7, tags: ['功能'] },
+      { uid: '13', type: 'preference', label: '深色模式问题', summary: '用户反馈深色模式下文字看不清', importance: 6, tags: ['UI', '反馈'] },
+      { uid: '14', type: 'fact', label: 'SQLite存储', summary: '数据库使用SQLite进行本地存储', importance: 5, tags: ['数据库'] },
+      { uid: '15', type: 'decision', label: '性能优化计划', summary: '需要对API响应时间进行优化', importance: 7, tags: ['性能'] },
+      { uid: '16', type: 'event', label: '团队会议', summary: '讨论了下季度技术规划', importance: 5, tags: ['会议'] },
+      { uid: '17', type: 'learning', label: 'Docker技巧', summary: '学会了Docker Compose高级用法', importance: 6, tags: ['技术'] },
+      { uid: '18', type: 'identity', label: '技术负责人', summary: '张三被任命为前端技术负责人', importance: 8, tags: ['职责'] },
+    ];
+
+    // Build links from shared tags
+    const links = [];
+    const drawn = new Set();
+    for (let i = 0; i < DATA.length; i++) {
+      for (let j = i + 1; j < DATA.length; j++) {
+        const shared = DATA[i].tags.filter(t => DATA[j].tags.includes(t));
+        if (shared.length > 0) {
+          const key = DATA[i].uid < DATA[j].uid ? `${DATA[i].uid}-${DATA[j].uid}` : `${DATA[j].uid}-${DATA[i].uid}`;
+          if (!drawn.has(key)) {
+            drawn.add(key);
+            links.push({ source: DATA[i].uid, target: DATA[j].uid });
+          }
+        }
+      }
+    }
+
+    document.getElementById('cnt').textContent = DATA.length;
+    document.getElementById('con').textContent = links.length;
+
+    const graphData = {
+      nodes: DATA.map(m => ({
+        id: m.uid,
+        label: m.label,
+        type: m.type,
+        summary: m.summary,
+        tags: m.tags,
+        importance: m.importance,
+        color: T[m.type]?.color || '#8b5cf6',
+      })),
+      links: links,
+    };
+
+    let selectedNode = null;
+    const fg = ForceGraph()(document.getElementById('graph'))({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: '#00000a',
+      nodeId: 'id',
+      nodeVal: d => d.importance * 3,
+      nodeColor: d => d.color,
+      nodeCanvasObject: (node, ctx, globalScale) => {
+        const fontSize = Math.max(8, 11 / globalScale);
+        const nodeSize = Math.sqrt(node.val) * 4;
+        const x = node.x, y = node.y;
+
+        // Glow
+        const grd = ctx.createRadialGradient(x, y, 0, x, y, nodeSize * 5);
+        grd.addColorStop(0, node.color + 'cc');
+        grd.addColorStop(0.3, node.color + '44');
+        grd.addColorStop(1, 'transparent');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(x, y, nodeSize * 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Node
+        ctx.fillStyle = node.color;
+        ctx.beginPath();
+        ctx.arc(x, y, nodeSize, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Selected ring
+        if (node === selectedNode) {
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, nodeSize + 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Label
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.label, x, y - nodeSize - 7);
+      },
+      nodeCanvasObjectMode: () => 'replace',
+      linkColor: () => 'rgba(255,255,255,0.08)',
+      linkWidth: 0.6,
+      linkDirectionalParticles: 0,
+      enableNodeDrag: true,
+      enableZoomInteraction: true,
+      enablePanInteraction: true,
+      d3AlphaDecay: 0.02,
+      d3VelocityDecay: 0.3,
+      warmupTicks: 100,
+      onNodeClick: node => {
+        selectedNode = node === selectedNode ? null : node;
+        updatePanel();
+        fg.refresh();
+      },
+      onBackgroundClick: () => {
+        selectedNode = null;
+        updatePanel();
+        fg.refresh();
+      },
+    });
+
+    fg.graphData(graphData);
+
+    function updatePanel() {
+      const pn = document.getElementById('pnl');
+      if (!selectedNode) { pn.classList.remove('visible'); return; }
+      pn.classList.add('visible');
+      const meta = T[selectedNode.type] || T.fact;
+      document.getElementById('pT').textContent = meta.label;
+      document.getElementById('pT').style.cssText = `background:${meta.color}22;color:${meta.color};border:1px solid ${meta.color}44`;
+      document.getElementById('pTi').textContent = selectedNode.label;
+      document.getElementById('pSu').textContent = selectedNode.summary;
+      document.getElementById('pMe').innerHTML = selectedNode.tags.map(t => `<span>${t}</span>`).join('');
+      document.getElementById('pU').textContent = selectedNode.id;
+    }
+
+    // Filters
+    const fltEl = document.getElementById('flt');
+    const allBtn = document.createElement('button');
+    allBtn.className = 'filter-btn active';
+    allBtn.innerHTML = '<span class="dot" style="background:#fff"></span>全部';
+    allBtn.onclick = () => {
+      filter = 'all';
+      document.querySelectorAll('.filter-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
+      fg.nodeColor(d => d.color);
+    };
+    fltEl.appendChild(allBtn);
+
+    let filter = 'all';
+    Object.entries(T).forEach(([type, meta]) => {
+      const b = document.createElement('button');
+      b.className = 'filter-btn';
+      b.innerHTML = `<span class="dot" style="background:${meta.color}"></span>${meta.label}`;
+      b.onclick = () => {
+        filter = type;
+        document.querySelectorAll('.filter-btn').forEach((btn, i) => {
+          btn.classList.toggle('active', Object.keys(T)[i - 1] === type);
+        });
+        fg.nodeColor(d => d.type === type ? T[type].color : '#222233');
+      };
+      fltEl.appendChild(b);
+    });
+
+    window.addEventListener('resize', () => {
+      fg.width(window.innerWidth);
+      fg.height(window.innerHeight);
+    });
+  </script>
+</body>
+</html>

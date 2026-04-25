@@ -1,0 +1,390 @@
+{
+  "$schema": "./config.schema.json",
+  "agentId": "default-agent",
+  "capture": {
+    "confidenceThreshold": 0.5,
+    "maxVersions": 5,
+    "enableAutoExtraction": false,
+    "extractionTimeout": 30000
+  },
+  "llmExtraction": {
+    "provider": "openai-compatible",
+    "model": "gpt-4o-mini",
+    "apiKey": "",
+    "baseURL": "",
+    "temperature": 0.7,
+    "maxTokens": 2000,
+    "timeout": 30000
+  },
+  "api": {
+    "enabled": false,
+    "port": 3000,
+    "host": "0.0.0.0",
+    "server": {
+      "timeout": 30000
+    },
+    "cors": {
+      "enabled": true,
+      "origin": "*"
+    },
+    "logging": {
+      "level": "info",
+      "enableRequestLogging": true,
+      "enableResponseLogging": false,
+      "enableFileLogging": false,
+      "logFilePath": "./logs/api.log"
+    },
+    "auth": {
+      "enabled": false
+    },
+    "security": {
+      "enableAuth": false,
+      "rateLimit": {
+        "enabled": false,
+        "windowMs": 60000,
+        "maxRequests": 100
+      }
+    },
+    "performance": {
+      "enableCompression": true,
+      "maxRequestBodySize": "10mb"
+    }
+  },
+  "mcp": {
+    "server": {
+      "transport": "stdio",
+      "port": null,
+      "host": null,
+      "ssePort": 3100,
+      "wsPort": 3200
+    },
+    "tools": {
+      "enableLogging": true,
+      "timeout": 30000,
+      "maxResults": 100
+    },
+    "logging": {
+      "level": "info"
+    },
+    "performance": {
+      "enableCache": true,
+      "cacheTTL": 300000,
+      "maxConcurrentTools": 10
+    }
+  },
+  "logging": {
+    "level": "info",
+    "output": "file",
+    "filePath": "./logs/omms.log",
+    "maxSize": 10485760,
+    "maxFiles": 5
+  },
+  "memoryService": {
+    "enabled": true,
+    "agentId": "default",
+    "store": {
+      "autoExtract": false,
+      "autoChunk": true,
+      "autoEnrich": true,
+      "chunkThreshold": 500,
+      "defaultType": "event",
+      "summaryMaxLength": 200,
+      "scopeUpgradeThresholds": {
+        "sessionToAgentImportance": 5,
+        "agentToGlobalScopeScore": 10,
+        "agentToGlobalImportance": 7
+      },
+      "blockThresholds": {
+        "coreMinImportance": 7,
+        "sessionMinImportance": 4,
+        "workingMinImportance": 2,
+        "archivedMinImportance": 1
+      }
+    },
+    "recall": {
+      "defaultLimit": 20,
+      "maxLimit": 100,
+      "minScore": 0.5,
+      "enableVectorSearch": true,
+      "enableKeywordSearch": true,
+      "vectorWeight": 0.7,
+      "keywordWeight": 0.3
+    },
+    "forget": {
+      "enabled": true,
+      "checkInterval": 86400000,
+      "archiveThreshold": 3,
+      "deleteThreshold": 1,
+      "maxInactiveDays": 90,
+      "protectLevel": 7,
+      "scoringWeights": {
+        "importanceWeight": 0.5,
+        "accessCountWeight": 0.3,
+        "recencyWeight": 0.2,
+        "accessCountNormalizer": 10
+      }
+    },
+    "scopeDegradation": {
+      "enabled": true,
+      "sessionToAgentDays": 7,
+      "agentToGlobalDays": 30,
+      "sessionUpgradeRecallThreshold": 5,
+      "agentUpgradeRecallThreshold": 10,
+      "upgradeScopeScoreMax": 10
+    },
+    "reinforcement": {
+      "enabled": true,
+      "lowBoostThreshold": 3,
+      "mediumBoostThreshold": 6,
+      "highBoostThreshold": 7,
+      "lowBoost": 0.5,
+      "mediumBoost": 0.3,
+      "highBoost": 0.1,
+      "defaultBoost": 0.2,
+      "maxImportance": 10,
+      "scopeBoost": 0.5,
+      "cooldownMs": 60000,
+      "accessWeight": 0.6,
+      "recencyWeight": 0.4
+    },
+    "cache": {
+      "enabled": true,
+      "maxSize": 1000,
+      "ttl": 3600000,
+      "evictionPolicy": "lru"
+    },
+    "episode": {
+      "enabled": true,
+      "autoDetect": true,
+      "detectIntervalMinutes": 30,
+      "mergeThreshold": 0.8,
+      "maxMemoriesPerEpisode": 50
+    },
+    "topic": {
+      "enabled": true,
+      "directSwitchThreshold": 0.5,
+      "noSwitchThreshold": 0.3,
+      "useLLM": true
+    },
+    "sentiment": {
+      "enabled": true,
+      "useModel": false,
+      "useLLMRefine": true,
+      "llmRefineThreshold": 0.6
+    },
+    "consolidation": {
+      "enabled": true,
+      "scheduleHour": 3,
+      "maxMemoriesPerCycle": 50,
+      "minRecallCount": 3,
+      "actions": {
+        "compress": true,
+        "link": true,
+        "snapshot": true,
+        "merge": true
+      },
+      "llmCompression": {
+        "enabled": true,
+        "temperature": 0.3,
+        "maxTokens": 500
+      },
+      "merge": {
+        "similarityThreshold": 0.85,
+        "maxGroupSize": 5
+      }
+    },
+    "spatial": {
+      "enabled": true,
+      "dimensions": 3,
+      "maxNeighbors": 10,
+      "clusteringThreshold": 0.8,
+      "autoLayout": true,
+      "layoutRefreshThreshold": 100,
+      "defaultRadius": 5,
+      "enableSpatialRecall": true
+    },
+    "logging": {
+      "enabled": true,
+      "level": "info"
+    },
+    "version": {
+      "similarityThreshold": 0.9,
+      "maxVersions": 5,
+      "enableVersioning": true
+    },
+    "capture": {
+      "maxMemoriesPerCapture": 5,
+      "similarityThreshold": 0.9,
+      "confidenceThreshold": 0.5,
+      "enableLLMSummarization": true,
+      "llmProvider": "custom",
+      "llmApiKey": "",
+      "llmEndpoint": "",
+      "llmModel": "Doubao-Seed-2.0-pro"
+    },
+    "roomManager": {
+      "mergeThreshold": 10,
+      "splitThreshold": 100,
+      "maxRecommendations": 5,
+      "similarityThreshold": 0.6,
+      "autoManage": false
+    },
+    "memoryRoomMapping": {
+      "maxRoomsPerMemory": 5,
+      "maxMemoriesPerRoom": 1000,
+      "autoCleanupOrphaned": true
+    },
+    "accessControl": {
+      "defaultAccessLevel": "read",
+      "auditEnabled": true,
+      "policyCacheSize": 1000
+    },
+    "indexUpdate": {
+      "mode": "batch",
+      "batchSize": 100,
+      "batchDelayMs": 5000,
+      "maxPendingTasks": 10000,
+      "highPriorityThreshold": 0.8,
+      "scheduledIntervalMs": 60000,
+      "maxRetries": 3
+    },
+    "recallStrategy": {
+      "timeDecayFactor": 0.5,
+      "diversityWeight": 0.2,
+      "contextWeight": 0.3,
+      "feedbackWeight": 0.2,
+      "maxResults": 20,
+      "minDiversityScore": 0.3,
+      "feedbackDecayMs": 86400000
+    },
+    "webhook": {
+      "maxRetries": 3,
+      "retryIntervalMs": 5000,
+      "timeoutMs": 30000,
+      "maxConcurrentDeliveries": 10,
+      "deliveryQueueSize": 1000
+    },
+    "degradation": {
+      "enabled": true,
+      "checkInterval": 3600000,
+      "decayRate": 0.01,
+      "importanceWeight": 0.7,
+      "scopeWeight": 0.3,
+      "deleteThreshold": 1,
+      "archiveThreshold": 3,
+      "protectLevel": 7
+    },
+    "scopeDegradation": {
+      "enabled": true,
+      "sessionToAgentDays": 7,
+      "agentToGlobalDays": 30,
+      "sessionUpgradeRecallThreshold": 5,
+      "agentUpgradeRecallThreshold": 10,
+      "upgradeScopeScoreMax": 10
+    },
+    "reinforcement": {
+      "enabled": true,
+      "lowBoostThreshold": 3,
+      "mediumBoostThreshold": 6,
+      "highBoostThreshold": 7,
+      "lowBoost": 0.5,
+      "mediumBoost": 0.3,
+      "highBoost": 0.1,
+      "defaultBoost": 0.2,
+      "maxImportance": 10,
+      "scopeBoost": 0.5,
+      "cooldownMs": 60000
+    },
+    "storage": {
+      "metaStoreDbPath": "./data/memory_meta.db",
+      "palaceStorePath": "./data/palace",
+      "graphStoreDbPath": "./data/graph/knowledge_graph.db",
+      "vectorStoreDbPath": "./data/vector",
+      "vectorStoreTableName": "memory_vectors",
+      "episodeStorePath": "./data/graph",
+      "graphBasePath": "./data",
+      "profileDbPath": "./data/profile.db",
+      "dreamReportsDbPath": "./data/graph/dream_reports.db",
+      "graphProcessorIntervalMs": 30000
+    }
+  },
+  "streaming": {
+    "maxEventsPerStream": 1000,
+    "maxStreams": 100,
+    "maxSubscriptionsPerClient": 10,
+    "streamRetentionMs": 3600000
+  },
+  "embedding": {
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "baseURL": "",
+    "apiKey": "",
+    "batchSize": 32,
+    "timeout": 30000
+  },
+  "dreamingEngine": {
+    "scheduler": {
+      "autoOrganize": true,
+      "organizeInterval": 21600000,
+      "memoryThreshold": 1000,
+      "fragmentationThreshold": 0.3,
+      "stalenessDays": 30,
+      "maxMemoriesPerCycle": 100,
+      "maxRelationsPerCycle": 50
+    },
+    "consolidation": {
+      "similarityThreshold": 0.85,
+      "maxGroupSize": 5,
+      "preserveNewest": true,
+      "createNewVersion": true,
+      "topicSimilarityThreshold": 0.5,
+      "semanticCheckThreshold": 0.5,
+      "vectorSearchLimit": 20,
+      "candidateThreshold": 0.7
+    },
+    "reorganization": {
+      "minEdgeWeight": 0.3,
+      "densityTarget": 0.5,
+      "orphanThreshold": 0.2,
+      "maxNewRelationsPerCycle": 30
+    },
+    "archival": {
+      "importanceThreshold": 2,
+      "stalenessDays": 30,
+      "archiveBlock": "archived",
+      "retentionDays": 90
+    },
+    "defragmentation": {
+      "fragmentationThreshold": 0.3,
+      "enableCompression": true
+    },
+    "themeExtraction": {
+      "minThemeStrength": 0.3,
+      "maxThemes": 5,
+      "useLLMEnhancement": true
+    },
+    "activeLearning": {
+      "enabled": true,
+      "maxPatterns": 100,
+      "maxWeakAreas": 50,
+      "patternConfidenceThreshold": 0.5,
+      "weakAreaThresholds": {
+        "minScopeMemoryCount": 5,
+        "lowImportanceRatioThreshold": 0.5
+      },
+      "highValueImportanceThreshold": 7,
+      "lowValueImportanceThreshold": 3
+    }
+  },
+  "multiAgent": {
+    "enabled": false,
+    "namespaceIsolation": false,
+    "federationEnabled": false,
+    "agents": {
+      "heartbeatTimeoutMs": 60000,
+      "heartbeatIntervalMs": 15000,
+      "maxMissedHeartbeats": 3,
+      "cleanupIntervalMs": 300000
+    }
+  }
+}

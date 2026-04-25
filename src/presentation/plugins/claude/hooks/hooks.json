@@ -1,0 +1,39 @@
+{
+  "description": "OMMS-PRO memory system hooks for automatic memory recall and capture",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start/init-session",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-response/recall-memory",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-end/capture-session",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
