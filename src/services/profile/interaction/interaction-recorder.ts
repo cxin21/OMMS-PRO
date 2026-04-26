@@ -484,13 +484,17 @@ export class InteractionRecorder {
     }
 
     // 执行实际删除：从 SQLite 和内存中删除
+    // 只有 SQLite 删除成功时才从内存中删除，保持一致性
     let deletedCount = 0;
+    const successfullyDeletedIds: Set<string> = new Set();
+
     for (const interaction of interactions) {
       try {
         // 从 SQLite 删除（better-sqlite3 是同步 API，无需 await）
         if (this.db) {
           this.db.prepare('DELETE FROM user_interactions WHERE id = ?').run(interaction.id);
         }
+        successfullyDeletedIds.add(interaction.id);
         deletedCount++;
       } catch (error) {
         this.logger.error('Failed to delete interaction from SQLite', {
@@ -500,11 +504,12 @@ export class InteractionRecorder {
       }
     }
 
-    // 从内存 Map 中删除
-    const userInteractions = this.interactions.get(userId) ?? [];
-    const deletedIds = new Set(interactions.map(i => i.id));
-    const remainingInteractions = userInteractions.filter(i => !deletedIds.has(i.id));
-    this.interactions.set(userId, remainingInteractions);
+    // 从内存 Map 中删除（只删除 SQLite 成功删除的记录）
+    if (successfullyDeletedIds.size > 0) {
+      const userInteractions = this.interactions.get(userId) ?? [];
+      const remainingInteractions = userInteractions.filter(i => !successfullyDeletedIds.has(i.id));
+      this.interactions.set(userId, remainingInteractions);
+    }
 
     this.logger.info(`Cleaned up ${deletedCount} old interactions for user ${userId}`);
     return deletedCount;

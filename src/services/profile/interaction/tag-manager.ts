@@ -44,7 +44,7 @@ export class TagManager {
     // Try to read profileService config from ConfigManager
     let maxTags = 50;
     try {
-      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('profileService');
+      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('memoryService.profileService');
       if (profileConfig) {
         maxTags = profileConfig.maxTagsPerUser ?? maxTags;
       }
