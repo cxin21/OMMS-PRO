@@ -34,22 +34,30 @@ import { TransactionManager } from '../utils/transaction-manager';
 // AAAK Flag 保护配置
 // ============================================================
 
-/**
- * AAAK Flag 保护系数
- * 来自 MemPalace 设计原则：DECISION/ORIGIN/CORE/PIVOT/TECHNICAL 标记提升重要性
- */
-const AAAK_FLAG_PROTECTION: Record<string, number> = {
-  DECISION: 0.5,
-  CORE: 0.3,
-  PIVOT: 0.4,
-  TECHNICAL: 0.2,
-};
-
 /** AAAK Flag 标签前缀 */
 const AAAK_FLAG_PREFIX = 'aaak:';
 
 /** AAAK Flag 最大叠加保护值 */
 const AAAK_MAX_PROTECTION = 1.0;
+
+/**
+ * 获取 AAAK Flag 保护系数
+ * 从 memoryService.degradation.aaakProtection 配置读取
+ */
+function getAAAKFlagProtection(): Record<string, number> {
+  try {
+    const degradationConfig = config.getConfigOrThrow<{ aaakProtection: Record<string, number> }>('memoryService.degradation');
+    return degradationConfig.aaakProtection;
+  } catch {
+    // 配置不存在时使用默认值（兼容旧版本）
+    return {
+      DECISION: 0.5,
+      CORE: 0.3,
+      PIVOT: 0.4,
+      TECHNICAL: 0.2,
+    };
+  }
+}
 
 /**
  * 从 tags 中提取 AAAK flags
@@ -61,12 +69,13 @@ function extractAAAKProtection(tags: string[] | undefined): number {
     return 0;
   }
 
+  const aaakProtection = getAAAKFlagProtection();
   let totalProtection = 0;
 
   for (const tag of tags) {
     if (tag.startsWith(AAAK_FLAG_PREFIX)) {
       const flag = tag.substring(AAAK_FLAG_PREFIX.length);
-      const protection = AAAK_FLAG_PROTECTION[flag];
+      const protection = aaakProtection[flag];
       if (protection !== undefined) {
         totalProtection += protection;
       }

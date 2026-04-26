@@ -40,8 +40,20 @@ export class TagManager {
 
   constructor(options?: TagManagerOptions) {
     this.logger = createLogger('tag-manager');
+
+    // Try to read profileService config from ConfigManager
+    let maxTags = 50;
+    try {
+      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('profileService');
+      if (profileConfig) {
+        maxTags = profileConfig.maxTagsPerUser ?? maxTags;
+      }
+    } catch {
+      // ConfigManager not initialized yet, will use default
+    }
+
     this.options = {
-      maxTagsPerUser: options?.maxTagsPerUser ?? 50,
+      maxTagsPerUser: options?.maxTagsPerUser ?? maxTags,
       autoExpireDays: options?.autoExpireDays ?? 90,
       enableTagRecommendation: options?.enableTagRecommendation ?? true,
     };

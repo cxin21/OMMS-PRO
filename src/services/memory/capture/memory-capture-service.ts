@@ -31,7 +31,6 @@ import { TransactionManager } from '../utils/transaction-manager';
 import { compressToAAAK, encodeAAAK } from '../aaak';
 import {
   IncrementalCaptureManager,
-  computeContentHash,
 } from './incremental-capture';
 
 /**
@@ -74,11 +73,11 @@ export class MemoryCaptureService {
   // 锁的创建时间（用于 TTL 检测）
   private versionLockTimestamps = new Map<string, number>();
 
-  // 锁的 TTL（毫秒），默认 30 秒
-  private static readonly VERSION_LOCK_TTL_MS = 30000;
+  // 锁的 TTL（毫秒），从 memoryService.capture.versionLockTTLMs 读取
+  private versionLockTTLMs: number;
 
-  // 最大锁数量，默认 100
-  private static readonly MAX_VERSION_LOCKS = 100;
+  // 最大锁数量，从 memoryService.capture.maxVersionLocks 读取
+  private maxVersionLocks: number;
 
   constructor(
     private versionManager: MemoryVersionManager,
@@ -92,6 +91,12 @@ export class MemoryCaptureService {
     } else {
       this.config = this.loadConfigFromManager();
     }
+
+    // 加载版本锁配置
+    const captureConfig = config.getConfigOrThrow<Record<string, unknown>>('memoryService.capture');
+    this.versionLockTTLMs = (captureConfig['versionLockTTLMs'] as number) ?? 30000;
+    this.maxVersionLocks = (captureConfig['maxVersionLocks'] as number) ?? 100;
+
     this.logger = createServiceLogger('MemoryCaptureService');
     this.inclusionDetector = new MemoryInclusionDetector();
     this.incrementalCaptureManager = new IncrementalCaptureManager();
@@ -192,7 +197,8 @@ export class MemoryCaptureService {
     const text = this.extractTextFromInput(input);
 
     // 在 LLM 提取前先检查内容 hash 预检
-    const contentHash = computeContentHash(text);
+    // 使用增量管理器的 computeContentHash 确保与 extractContentText 一致
+    const contentHash = this.incrementalCaptureManager.computeContentHash(input);
     const existingMemoryUid = this.incrementalCaptureManager.getContentHashCache().checkDuplicate(contentHash);
     if (existingMemoryUid) {
       this.logger.info('Content hash duplicate detected, skipping LLM extraction', {
@@ -738,10 +744,10 @@ export class MemoryCaptureService {
     this.cleanupExpiredLocks();
 
     // 检查锁数量限制
-    if (this.versionLocks.size >= MemoryCaptureService.MAX_VERSION_LOCKS) {
+    if (this.versionLocks.size >= this.maxVersionLocks) {
       this.logger.warn('Version lock map full, cleaning up oldest locks', {
         size: this.versionLocks.size,
-        maxSize: MemoryCaptureService.MAX_VERSION_LOCKS,
+        maxSize: this.maxVersionLocks,
       });
       this.cleanupOldestLocks();
     }
@@ -752,7 +758,7 @@ export class MemoryCaptureService {
       // 检查锁是否过期
       if (existingLock) {
         const lockAge = now - (this.versionLockTimestamps.get(versionGroupId) || 0);
-        if (lockAge > MemoryCaptureService.VERSION_LOCK_TTL_MS) {
+        if (lockAge > this.versionLockTTLMs) {
           // 锁已过期，删除并创建新锁
           this.versionLocks.delete(versionGroupId);
           this.versionLockTimestamps.delete(versionGroupId);
@@ -796,7 +802,7 @@ export class MemoryCaptureService {
   private cleanupExpiredLocks(): void {
     const now = Date.now();
     for (const [key, timestamp] of this.versionLockTimestamps.entries()) {
-      if (now - timestamp > MemoryCaptureService.VERSION_LOCK_TTL_MS) {
+      if (now - timestamp > this.versionLockTTLMs) {
         this.versionLocks.delete(key);
         this.versionLockTimestamps.delete(key);
         this.logger.debug('Cleaned up expired lock', { key, age: now - timestamp });
@@ -812,7 +818,7 @@ export class MemoryCaptureService {
     const sortedEntries = [...this.versionLockTimestamps.entries()]
       .sort((a, b) => a[1] - b[1]);
 
-    const toDelete = sortedEntries.slice(0, Math.floor(MemoryCaptureService.MAX_VERSION_LOCKS / 2));
+    const toDelete = sortedEntries.slice(0, Math.floor(this.maxVersionLocks / 2));
     for (const [key] of toDelete) {
       this.versionLocks.delete(key);
       this.versionLockTimestamps.delete(key);

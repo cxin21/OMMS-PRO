@@ -617,13 +617,11 @@ export class StorageMemoryService {
       throw new Error('StorageMemoryService: ConfigManager not initialized. Cannot calculate boost.');
     }
 
-    // 优先从 memoryService.reinforcement 读取（新版配置路径）
-    // 回退到 memoryService.reinforce（兼容旧版）
-    const reinforceConfig = (config.getConfig('memoryService.reinforcement') as any)
-      || (config.getConfig('memoryService.reinforce') as any);
+    // 从 memoryService.reinforcement 读取（新版配置路径）
+    const reinforceConfig = config.getConfigOrThrow<any>('memoryService.reinforcement');
 
     if (!reinforceConfig) {
-      throw new Error('StorageMemoryService: reinforcement configManager not found in ConfigManager.');
+      throw new Error('StorageMemoryService: reinforcement config not found in ConfigManager.');
     }
 
     const lowThreshold = reinforceConfig.lowBoostThreshold;

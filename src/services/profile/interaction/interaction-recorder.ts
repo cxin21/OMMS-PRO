@@ -467,23 +467,47 @@ export class InteractionRecorder {
   }
 
   /**
-   * 清理旧交互
+   * 清理旧交互（实际删除）
    */
-  cleanupOldInteractions(
+  async cleanupOldInteractions(
     userId: string,
     maxAgeDays: number = 90
-  ): number {
+  ): Promise<number> {
     const cutoffTime = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
     const interactions = this.getInteractions(userId, {
       endDate: cutoffTime,
       limit: 10000,
     });
 
-    this.logger.info(
-      `Would cleanup ${interactions.length} interactions older than ${maxAgeDays} days for user ${userId}`
-    );
+    if (interactions.length === 0) {
+      return 0;
+    }
 
-    return interactions.length;
+    // 执行实际删除：从 SQLite 和内存中删除
+    let deletedCount = 0;
+    for (const interaction of interactions) {
+      try {
+        // 从 SQLite 删除
+        if (this.db) {
+          await this.db.prepare('DELETE FROM user_interactions WHERE id = ?').run(interaction.id);
+        }
+        deletedCount++;
+      } catch (error) {
+        this.logger.error('Failed to delete interaction from SQLite', {
+          interactionId: interaction.id,
+          error: String(error),
+        });
+      }
+    }
+
+    // 从内存 Map 中删除
+    const userInteractions = this.interactions.get(userId) ?? [];
+    const deletedIds = new Set(interactions.map(i => i.id));
+    const remainingInteractions = userInteractions.filter(i => !deletedIds.has(i.id));
+    this.interactions.set(userId, remainingInteractions);
+
+    this.logger.info(`Cleaned up ${deletedCount} old interactions for user ${userId}`);
+    return deletedCount;
   }
 
   /**

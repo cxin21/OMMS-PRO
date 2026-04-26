@@ -50,9 +50,23 @@ export class ProfileCache {
 
   constructor(options?: ProfileCacheOptions) {
     this.logger = createLogger('profile-cache');
+
+    // Try to read cache config from ConfigManager
+    let cacheMaxSize = 1000;
+    let cacheTtl = 5 * 60 * 1000;
+    try {
+      const cacheConfig = config.getConfig<{ maxSize: number; ttl: number }>('memoryService.cache');
+      if (cacheConfig) {
+        cacheMaxSize = cacheConfig.maxSize ?? cacheMaxSize;
+        cacheTtl = cacheConfig.ttl ?? cacheTtl;
+      }
+    } catch {
+      // ConfigManager not initialized yet, will use defaults
+    }
+
     this.options = {
-      maxSize: options?.maxSize ?? 1000,
-      ttl: options?.ttl ?? 5 * 60 * 1000, // 5 分钟
+      maxSize: options?.maxSize ?? cacheMaxSize,
+      ttl: options?.ttl ?? cacheTtl,
       dbPath: options?.dbPath ?? '',
     };
     this.personaCache = new Map();

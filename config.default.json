@@ -220,7 +220,11 @@
       "llmProvider": "custom",
       "llmApiKey": "",
       "llmEndpoint": "",
-      "llmModel": "Doubao-Seed-2.0-pro"
+      "llmModel": "Doubao-Seed-2.0-pro",
+      "versionLockTTLMs": 30000,
+      "maxVersionLocks": 100,
+      "contentHashCacheSize": 1000,
+      "enableIncrementalCapture": true
     },
     "roomManager": {
       "mergeThreshold": 10,
@@ -272,7 +276,13 @@
       "scopeWeight": 0.3,
       "deleteThreshold": 1,
       "archiveThreshold": 3,
-      "protectLevel": 7
+      "protectLevel": 7,
+      "aaakProtection": {
+        "DECISION": 0.5,
+        "CORE": 0.3,
+        "PIVOT": 0.4,
+        "TECHNICAL": 0.2
+      }
     },
     "scopeDegradation": {
       "enabled": true,
@@ -305,7 +315,11 @@
       "graphBasePath": "./data",
       "profileDbPath": "./data/profile.db",
       "dreamReportsDbPath": "./data/graph/dream_reports.db",
-      "graphProcessorIntervalMs": 30000
+      "graphProcessorIntervalMs": 30000,
+      "tagDbPath": "./data/tags.db"
+    },
+    "profileService": {
+      "maxTagsPerUser": 50
     }
   },
   "streaming": {

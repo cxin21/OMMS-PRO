@@ -259,19 +259,20 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
             const limit = params.limit ?? 10;
             const offset = params.offset ?? 0;
 
-            const result = await memoryService.recall({
-              agentId: params.agentId,
+            // 使用 listMemories 而不是 recall，避免召回语义（更新访问统计、强化等）
+            const result = await memoryService.listMemories({
+              limit,
+              offset,
               types: params.type ? [params.type as MemoryType] : undefined,
-              limit: limit + offset,
+              orderBy: 'createdAt',
+              orderDir: 'desc',
             });
-
-            const memories = result.memories.slice(offset, offset + limit);
 
             return {
               content: [{
                 type: 'text',
-                text: `记忆列表（共 ${result.totalFound} 条，显示 ${offset + 1}-${offset + memories.length}）\n\n` +
-                  memories.map((m, i) => `${offset + i + 1}. [${m.type}] ${m.content.substring(0, 80)}...\n   UID: ${m.uid} | 重要性: ${m.importance} | 作用域: ${m.scope}`).join('\n\n'),
+                text: `记忆列表（共 ${result.total} 条，显示 ${offset + 1}-${offset + result.memories.length}）\n\n` +
+                  result.memories.map((m, i) => `${offset + i + 1}. [${m.type}] ${m.content.substring(0, 80)}...\n   UID: ${m.uid} | 重要性: ${m.importance} | 作用域: ${m.scope}`).join('\n\n'),
               }],
             };
           } catch (error: any) {

@@ -186,10 +186,13 @@ export interface EntityMapping {
 // ============================================================
 
 /**
- * 提取词频
+ * 提取词频（支持中文和英文）
+ * 中文词：2个或以上连续汉字
+ * 英文词：3个或以上字母/连字符
  */
 function extractWordFrequency(text: string): Map<string, number> {
-  const words = text.match(/[a-zA-Z][a-zA-Z_-]{2,}/g) || [];
+  // 支持中文（2+汉字）和英文（3+字母）
+  const words = text.match(/[\u4e00-\u9fa5]{2,}|[a-zA-Z][a-zA-Z_-]{2,}/g) || [];
   const freq = new Map<string, number>();
 
   for (const word of words) {
@@ -318,15 +321,26 @@ export function encodeEntity(name: string, mapping?: EntityMapping): string {
 
 /**
  * 检测专有名词（在文本中出现 >= 2 次）
+ * 支持中文（汉字词出现 >= 2 次）和英文（大写开头专有名词）
  */
 export function detectEntities(text: string, minOccurrences: number = 2): string[] {
   const freq = extractWordFrequency(text);
   const entities: string[] = [];
 
   for (const [word, count] of freq.entries()) {
+    // 英文专有名词：首字母大写
     const firstChar = word[0];
-    if (count >= minOccurrences && firstChar >= 'A' && firstChar <= 'Z') {
-      entities.push(word);
+    const isEnglishProperNoun = firstChar >= 'A' && firstChar <= 'Z';
+    // 中文词：连续汉字
+    const isChinese = /^[\u4e00-\u9fa5]+$/.test(word);
+
+    if (count >= minOccurrences) {
+      if (isEnglishProperNoun) {
+        entities.push(word);
+      } else if (isChinese && word.length >= 2) {
+        // 中文词直接作为实体
+        entities.push(word);
+      }
     }
   }
 

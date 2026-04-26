@@ -32,6 +32,7 @@ import type { MemoryRecallConfig } from '../../../core/types/config';
 import { TransactionManager } from '../utils/transaction-manager';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
 import { prescreenByAAAK } from '../search/aaak-prescreen';
+import { rerankWithBM25 } from '../search/hybrid-search';
 
 // ============================================================
 // 类型定义
@@ -813,7 +814,54 @@ export class MemoryRecallManager {
       return { memories: [] };
     }
 
-    // 5. 补全记忆信息
+    // 5. BM25 重排序（使用混合搜索提升召回质量）
+    if (params.query && params.query.trim().length > 0) {
+      try {
+        // 获取 palace 内容用于 BM25 评分
+        const palaceRefs = finalFiltered.map(r => r.metadata.palaceRef);
+        const contents = await this.palaceStore.retrieveMany(palaceRefs);
+
+        // 构建 BM25 输入（使用相似度 1-distance 转换）
+        const bm25Input = finalFiltered.map(r => ({
+          uid: r.id,
+          text: contents.get(r.metadata.palaceRef) || '',
+          distance: 1 - r.score, // convert similarity to distance for BM25
+          metadata: r.metadata as unknown as Record<string, unknown>,
+        }));
+
+        // 执行 BM25 重排序
+        const reranked = rerankWithBM25(bm25Input, params.query);
+
+        // 根据重排序结果调整 finalFiltered 的顺序
+        const rerankedMap = new Map(reranked.map((r, i) => [r.uid, { rank: i, score: r.combinedScore }]));
+        finalFiltered.sort((a, b) => {
+          const aInfo = rerankedMap.get(a.id);
+          const bInfo = rerankedMap.get(b.id);
+          if (!aInfo || !bInfo) return 0;
+          return aInfo.rank - bInfo.rank;
+        });
+
+        // 更新分数为 BM25 综合得分
+        for (const r of finalFiltered) {
+          const info = rerankedMap.get(r.id);
+          if (info) {
+            r.score = info.score;
+          }
+        }
+
+        this.logger.debug('BM25 reranking applied', {
+          queryLength: params.query.length,
+          resultCount: finalFiltered.length,
+        });
+      } catch (bm25Error) {
+        // BM25 重排序失败时，继续使用原始向量搜索结果
+        this.logger.warn('BM25 reranking failed, using vector search results', {
+          error: String(bm25Error),
+        });
+      }
+    }
+
+    // 6. 补全记忆信息
     const memories = await this.enrichMemories(finalFiltered, filteredCandidates, params.currentAgentId);
 
     return { memories };

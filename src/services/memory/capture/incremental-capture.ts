@@ -284,25 +284,20 @@ export class IncrementalCaptureManager {
     this.logger = createServiceLogger('IncrementalCaptureManager');
 
     // 从配置加载
-    try {
-      const captureConfig = config.getConfigOrThrow<Record<string, unknown>>('memoryService.capture');
-      this.enableIncrementalCapture = (captureConfig['enableIncrementalCapture'] as boolean) ?? true;
+    const captureConfig = config.getConfigOrThrow<Record<string, unknown>>('memoryService.capture');
+    this.enableIncrementalCapture = (captureConfig['enableIncrementalCapture'] as boolean) ?? true;
 
-      const cacheSize = (captureConfig['contentHashCacheSize'] as number) ?? 1000;
-      this.contentHashCache = new ContentHashCache(cacheSize);
-
-      this.logger.info('IncrementalCaptureManager initialized', {
-        enableIncrementalCapture: this.enableIncrementalCapture,
-        contentHashCacheSize: cacheSize,
-      });
-    } catch (error) {
-      // 配置不存在时使用默认值
-      this.enableIncrementalCapture = true;
-      this.contentHashCache = new ContentHashCache(1000);
-      this.logger.warn('Failed to load incremental capture config, using defaults', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    // contentHashCacheSize 必须配置，不提供默认值
+    const cacheSize = captureConfig['contentHashCacheSize'] as number;
+    if (cacheSize === undefined || cacheSize === null) {
+      throw new Error('memoryService.capture.contentHashCacheSize is required but not configured');
     }
+    this.contentHashCache = new ContentHashCache(cacheSize);
+
+    this.logger.info('IncrementalCaptureManager initialized', {
+      enableIncrementalCapture: this.enableIncrementalCapture,
+      contentHashCacheSize: cacheSize,
+    });
   }
 
   /**
@@ -372,6 +367,26 @@ export class IncrementalCaptureManager {
    */
   getContentHashCache(): ContentHashCache {
     return this.contentHashCache;
+  }
+
+  /**
+   * 计算 CaptureInput 的内容 hash
+   * 使用与增量管理器内部相同的文本提取逻辑
+   * @param captureInput 捕获输入
+   * @returns 内容 hash
+   */
+  computeContentHash(captureInput: CaptureInput): string {
+    const text = extractContentText(captureInput);
+    return computeContentHash(text);
+  }
+
+  /**
+   * 从 CaptureInput 提取文本用于 hash 计算
+   * @param captureInput 捕获输入
+   * @returns 纯文本内容
+   */
+  extractTextForHash(captureInput: CaptureInput): string {
+    return extractContentText(captureInput);
   }
 
   /**

@@ -63,16 +63,10 @@ export class ProfileManager {
   constructor(options?: ProfileManagerOptions) {
     this.logger = createLogger('profile-manager');
 
-    // 获取缓存配置（优先从 ConfigManager 获取）
-    let cacheSize = 1000;
-    let cacheTtl = 5 * 60 * 1000;
-    try {
-      const memoryServiceConfig = config.getConfig('memoryService.cache');
-      cacheSize = (memoryServiceConfig as any).maxSize ?? cacheSize;
-      cacheTtl = (memoryServiceConfig as any).ttl ?? cacheTtl;
-    } catch {
-      // ConfigManager 未初始化，使用默认值
-    }
+    // 获取缓存配置（必须从 ConfigManager 获取，不提供默认值）
+    const memoryServiceConfig = config.getConfigOrThrow<{ maxSize: number; ttl: number }>('memoryService.cache');
+    const cacheSize = memoryServiceConfig.maxSize;
+    const cacheTtl = memoryServiceConfig.ttl;
 
     // 配置管理
     // 从 ConfigManager 获取存储路径
