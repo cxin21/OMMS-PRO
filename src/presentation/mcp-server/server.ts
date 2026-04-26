@@ -399,7 +399,7 @@ export class MCPServer {
     });
 
     const port = this.config.server.ssePort ?? this.config.server.port ?? 3100;
-    const host = this.config.server.host || '0.0.0.0';
+    const host = this.config.server.host ?? '0.0.0.0';
 
     server.listen(port, host, () => {
       this.logger.info(`SSE server listening on ${host}:${port}`);
