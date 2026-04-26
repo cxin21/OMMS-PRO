@@ -385,6 +385,7 @@ export class MemoryVersionManager {
       newVector = new Array(embeddingDimension).fill(0);
     }
     const versionGroupId = existingMeta.versionGroupId || existingMeta.uid;
+    // 注意：newVectorDoc 是旧版本的向量，其 isLatestVersion 应为 false
     const newVectorDoc: VectorDocument = {
       id: newUid,
       vector: newVector,
@@ -401,7 +402,7 @@ export class MemoryVersionManager {
         createdAt: now,
         palaceRef: newPalaceRef,
         version: newVersion,
-        isLatestVersion: true,
+        isLatestVersion: false,  // 旧版本的向量，isLatestVersion 必须为 false
         versionGroupId,
         summary: newSummary,
       },

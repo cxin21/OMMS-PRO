@@ -1,0 +1,21 @@
+{
+  "name": "omms-pro-local",
+  "metadata": {
+    "description": "OMMS-PRO memory system plugin for Claude Code - enables cross-session memory recall and capture"
+  },
+  "owner": {
+    "name": "OMMS-PRO",
+    "email": "omms@example.com"
+  },
+  "plugins": [
+    {
+      "name": "omms-pro",
+      "description": "OMMS-PRO memory system integration for Claude Code - enables cross-session memory recall and capture",
+      "version": "1.0.0",
+      "source": "./",
+      "author": {
+        "name": "OMMS-PRO"
+      }
+    }
+  ]
+}

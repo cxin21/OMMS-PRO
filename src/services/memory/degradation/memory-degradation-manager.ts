@@ -243,6 +243,9 @@ export class MemoryDegradationManager {
 
     this.lastReinforceTime = new Map();
     this.globalLastReinforceTime = 0;
+
+    // 自动启动遗忘定时器（确保遗忘和降级功能正常运行）
+    this.startDegradationTimer();
   }
 
   // ============================================================

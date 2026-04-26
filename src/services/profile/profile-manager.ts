@@ -30,6 +30,7 @@ import type {
   UserReport,
   UserDataExport,
   ExportFormat,
+  ExportMetadata,
   SensitiveDataType,
   TagCategory,
   TagSource,
@@ -642,9 +643,100 @@ export class ProfileManager {
   async exportUserData(
     userId: string,
     format: ExportFormat = 'json',
-    options?: any
+    options?: {
+      includePersona?: boolean;
+      includePreferences?: boolean;
+      includeInteractions?: boolean;
+      includeTags?: boolean;
+      includeSensitive?: boolean;
+      dateRange?: { start: number; end: number };
+    }
   ): Promise<UserDataExport> {
-    return this.privacyManager.exportUserData(userId, format, options);
+    const now = Date.now();
+    const exportData: UserDataExport['data'] = {};
+
+    // 收集要导出的数据
+    if (options?.includePersona !== false) {
+      const persona = await this.getPersona(userId);
+      if (persona) {
+        exportData.persona = [persona];
+      }
+    }
+
+    if (options?.includePreferences !== false) {
+      const preferences = await this.getPreferences(userId);
+      if (preferences) {
+        exportData.preferences = preferences;
+      }
+    }
+
+    if (options?.includeInteractions !== false) {
+      const interactions = this.getInteractionHistory(userId);
+      if (interactions.length > 0) {
+        exportData.interactions = interactions;
+      }
+    }
+
+    if (options?.includeTags !== false) {
+      const tags = this.getTags(userId);
+      if (tags.length > 0) {
+        exportData.tags = tags;
+      }
+    }
+
+    // 过滤敏感数据
+    if (options?.includeSensitive !== true) {
+      const sensitiveMarks = this.privacyManager.getSensitiveMarks(userId);
+      const sensitiveDataIds = new Set(sensitiveMarks.map(m => m.dataId));
+
+      // 过滤 persona 中的敏感数据
+      if (exportData.persona) {
+        exportData.persona = exportData.persona.filter(p => !sensitiveDataIds.has(p.id));
+      }
+
+      // 过滤 preferences 中的敏感数据
+      if (exportData.preferences) {
+        // preferences 是单对象，需要过滤其中的敏感字段
+      }
+
+      // 过滤 interactions
+      if (exportData.interactions) {
+        exportData.interactions = exportData.interactions.filter(i => !sensitiveDataIds.has(i.id));
+      }
+
+      // 过滤 tags
+      if (exportData.tags) {
+        exportData.tags = exportData.tags.filter(t => !sensitiveDataIds.has(t.id));
+      }
+    }
+
+    // 计算统计信息
+    const recordCount =
+      (exportData.persona?.length ?? 0) +
+      (exportData.preferences ? 1 : 0) +
+      (exportData.interactions?.length ?? 0) +
+      (exportData.tags?.length ?? 0);
+
+    const metadata: ExportMetadata = {
+      version: '1.0.0',
+      recordCount,
+      dateRange: {
+        start: options?.dateRange?.start ?? 0,
+        end: options?.dateRange?.end ?? now,
+      },
+    };
+
+    const exportResult: UserDataExport = {
+      userId,
+      exportedAt: now,
+      format,
+      data: exportData,
+      metadata,
+    };
+
+    this.logger.info(`Exported ${recordCount} records for user ${userId}`);
+
+    return exportResult;
   }
 
   async deleteUserData(

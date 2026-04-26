@@ -148,9 +148,42 @@ OMMS-PRO/
 └── package.json
 ```
 
+### 核心模块说明
+
+#### 记忆服务 (src/services/memory/)
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| MemoryCaptureService | `capture/memory-capture-service.ts` | 从对话提取记忆，LLM 增强提取 |
+| MemoryStoreManager | `store/memory-store-manager.ts` | 五层存储编排（Cache/Vector/Meta/Palace/Graph） |
+| MemoryRecallManager | `recall/memory-recall-manager.ts` | 渐进式召回，强化机制 |
+| MemoryVersionManager | `store/memory-version-manager.ts` | UID-swap 版本管理，版本链 |
+| MemoryDegradationManager | `degradation/memory-degradation-manager.ts` | 遗忘、归档、作用域降级 |
+| DreamingManager | `dreaming/dreaming-manager.ts` | 三阶段梦境整理 |
+| ConsolidationManager | `consolidation/consolidation-manager.ts` | 睡眠时记忆合并 |
+
+#### 用户画像 (src/services/profile/)
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| ProfileManager | `profile-manager.ts` | 主协调器，集成 MemoryService |
+| PersonaBuilder | `persona/persona-builder.ts` | LLM 构建用户人格 |
+| PreferenceInferer | `preference/preference-inferer.ts` | 行为推断偏好 |
+| InteractionRecorder | `interaction/interaction-recorder.ts` | 交互记录存储 |
+| TagManager | `interaction/tag-manager.ts` | 用户标签管理 |
+
+#### 存储层 (src/infrastructure/storage/stores/)
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| SQLiteMetaStore | `sqlite-meta-store.ts` | 元数据 SQLite 持久化 |
+| VectorStore | `vector-store.ts` | LanceDB 向量存储 |
+| PalaceStore | `palace-store.ts` | 文件系统 Palace 存储 |
+| GraphStore | `graph-store.ts` | 知识图谱存储 |
+
 ## 配置
 
-配置加载优先级：`config.default.json` -> `config.json` -> 环境变量
+配置加载优先级：`config.default.json` → `config.json` → 环境变量
 
 复制 `config.default.json` 为 `config.json` 进行自定义配置。主要配置项：
 

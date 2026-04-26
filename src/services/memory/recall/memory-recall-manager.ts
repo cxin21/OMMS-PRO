@@ -240,6 +240,15 @@ const DEFAULT_RECALL_CONFIG: RecallConfig = {
 export class MemoryRecallManager {
   private logger: ILogger;
   private config: RecallConfig;
+  private reinforcementConfig: {
+    lowBoostThreshold: number;
+    mediumBoostThreshold: number;
+    highBoostThreshold: number;
+    lowBoost: number;
+    mediumBoost: number;
+    highBoost: number;
+    defaultBoost: number;
+  };
 
   constructor(
     private vectorStore: IVectorStore,
@@ -252,6 +261,17 @@ export class MemoryRecallManager {
   ) {
     this.logger = createServiceLogger('MemoryRecallManager');
 
+    // 默认强化配置
+    this.reinforcementConfig = {
+      lowBoostThreshold: 3,
+      mediumBoostThreshold: 6,
+      highBoostThreshold: 7,
+      lowBoost: 0.5,
+      mediumBoost: 0.3,
+      highBoost: 0.1,
+      defaultBoost: 0.2,
+    };
+
     // 如果传入了配置则使用，否则从 ConfigManager 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
       this.config = { ...DEFAULT_RECALL_CONFIG, ...userConfig };
@@ -261,7 +281,18 @@ export class MemoryRecallManager {
       this.config = { ...DEFAULT_RECALL_CONFIG };
       if (config.isInitialized()) {
         const recallConfig = config.getConfig('memoryService.recall') as MemoryRecallConfig;
-        const reinforcementConfig = config.getConfig('memoryService.reinforcement') as any;
+        const reinforcement = config.getConfig('memoryService.reinforcement') as any;
+        if (reinforcement) {
+          this.reinforcementConfig = {
+            lowBoostThreshold: reinforcement.lowBoostThreshold ?? 3,
+            mediumBoostThreshold: reinforcement.mediumBoostThreshold ?? 6,
+            highBoostThreshold: reinforcement.highBoostThreshold ?? 7,
+            lowBoost: reinforcement.lowBoost ?? 0.5,
+            mediumBoost: reinforcement.mediumBoost ?? 0.3,
+            highBoost: reinforcement.highBoost ?? 0.1,
+            defaultBoost: reinforcement.defaultBoost ?? 0.2,
+          };
+        }
         if (recallConfig) {
           this.config = {
             ...this.config,
@@ -271,7 +302,7 @@ export class MemoryRecallManager {
             enableKeywordSearch: recallConfig.enableKeywordSearch ?? DEFAULT_RECALL_CONFIG.enableKeywordSearch,
             vectorWeight: recallConfig.vectorWeight ?? DEFAULT_RECALL_CONFIG.vectorWeight,
             keywordWeight: recallConfig.keywordWeight ?? DEFAULT_RECALL_CONFIG.keywordWeight,
-            scopeBoost: reinforcementConfig?.scopeBoost ?? DEFAULT_RECALL_CONFIG.scopeBoost,
+            scopeBoost: reinforcement?.scopeBoost ?? DEFAULT_RECALL_CONFIG.scopeBoost,
           };
         }
       }
@@ -1284,16 +1315,17 @@ export class MemoryRecallManager {
    * - 距上次召回 > 24 小时：衰减 80%
    */
   private calculateImportanceBoost(currentImportance: number, lastRecalledAt?: number): number {
-    // 基础增幅
+    // 使用配置的强化阈值和增幅值
+    const config = this.reinforcementConfig;
     let boost: number;
-    if (currentImportance < 3) {
-      boost = 0.5; // 低重要性记忆更容易被强化
-    } else if (currentImportance < 6) {
-      boost = 0.3; // 中重要性记忆
-    } else if (currentImportance < 7) {
-      boost = 0.1; // 高重要性记忆已经很强，只需小幅强化
+    if (currentImportance < config.lowBoostThreshold) {
+      boost = config.lowBoost; // 低重要性记忆更容易被强化
+    } else if (currentImportance < config.mediumBoostThreshold) {
+      boost = config.mediumBoost; // 中重要性记忆
+    } else if (currentImportance < config.highBoostThreshold) {
+      boost = config.highBoost; // 高重要性记忆已经很强，只需小幅强化
     } else {
-      boost = 0.2; // 极高重要性记忆维持稳定
+      boost = config.defaultBoost; // 极高重要性记忆维持稳定
     }
 
     // 时间衰减

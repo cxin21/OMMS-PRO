@@ -10,6 +10,50 @@ import type { MemoryService, MemoryCaptureService } from '../../services/memory'
 import type { ProfileManager } from '../../services/profile/profile-manager';
 import type { ILogger } from '../../shared/logging';
 import { MemoryType, MemoryScope } from '../../core/types/memory';
+import { config } from '../../shared/config';
+
+/**
+ * 获取默认 Agent ID
+ */
+function getDefaultAgentId(): string {
+  try {
+    if (config.isInitialized()) {
+      const agentId = config.getConfig('agentId') as string | undefined;
+      if (agentId) return agentId;
+      const apiConfig = config.getConfig('api') as any;
+      if (apiConfig?.agentId) return apiConfig.agentId;
+    }
+  } catch { /* ignore */ }
+  return 'default-agent';
+}
+
+/**
+ * 获取默认 Session ID
+ */
+function getDefaultSessionId(): string {
+  try {
+    if (config.isInitialized()) {
+      const sessionConfig = config.getConfig('session') as any;
+      if (sessionConfig?.defaultSessionId) return sessionConfig.defaultSessionId;
+    }
+  } catch { /* ignore */ }
+  return 'default-session';
+}
+
+/**
+ * 获取对话内容检测阈值（用于决定是否使用 LLM 提取）
+ */
+function getConversationThreshold(): number {
+  try {
+    if (config.isInitialized()) {
+      const storeConfig = config.getConfig('memoryService.store') as any;
+      if (storeConfig?.chunkThreshold) return storeConfig.chunkThreshold;
+      const captureConfig = config.getConfig('capture') as any;
+      if (captureConfig?.conversationThreshold) return captureConfig.conversationThreshold;
+    }
+  } catch { /* ignore */ }
+  return 500;
+}
 
 export interface MemoryRoutesDeps {
   memoryService: MemoryService;
@@ -100,12 +144,13 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         return;
       }
 
-      const finalAgentId = agentId || 'default-agent';
-      const finalSessionId = sessionId || 'default-session';
+      const finalAgentId = agentId || getDefaultAgentId();
+      const finalSessionId = sessionId || getDefaultSessionId();
 
       // 检测是否是对话内容（多行、包含用户/助手标记等）
+      const conversationThreshold = getConversationThreshold();
       const isConversationContent =
-        finalContent.length >= 500 &&
+        finalContent.length >= conversationThreshold &&
         (finalContent.includes('\n') || finalContent.includes('用户:') || finalContent.includes('助手:') || finalContent.includes('user:') || finalContent.includes('assistant:'));
 
       // 决定是否使用 LLM 提取：显式指定或内容是对话
@@ -127,7 +172,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
         // 异步记录到用户画像
         if (deps.profileManager) {
-          const userId = agentId || 'default-user';
+          const userId = agentId || getDefaultAgentId();
           deps.profileManager.recordInteraction(
             userId,
             'memory_capture',
@@ -173,7 +218,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
       // 异步记录到用户画像（fire-and-forget，不阻塞响应）
       if (deps.profileManager) {
-        const userId = agentId || 'default-user';
+        const userId = agentId || getDefaultAgentId();
         deps.profileManager.recordInteraction(
           userId,
           'memory_capture',

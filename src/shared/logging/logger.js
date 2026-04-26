@@ -103,10 +103,41 @@ export class Logger {
     }
     /**
      * 记录 error 级别日志
+     *
+     * 自动捕获并输出：
+     * - Error 名称和消息
+     * - 完整调用堆栈
+     * - cause 链（如果存在）
+     * - 附加上下文数据
      */
     error(message, errorOrData, data) {
         if (errorOrData instanceof Error) {
-            this.log('error', message, errorOrData, data);
+            const enrichedData = {
+                ...data,
+                errorName: errorOrData.name,
+                errorMessage: errorOrData.message,
+            };
+            // 提取完整堆栈
+            if (errorOrData.stack) {
+                enrichedData['stack'] = errorOrData.stack;
+            }
+            // 提取 cause 链（ES2022 Error.cause）
+            let cause = errorOrData.cause;
+            if (cause) {
+                const causeChain = [];
+                while (cause) {
+                    causeChain.push({
+                        name: cause.name ?? 'Unknown',
+                        message: cause.message ?? String(cause),
+                        stack: cause.stack,
+                    });
+                    cause = cause.cause;
+                }
+                if (causeChain.length > 0) {
+                    enrichedData['causeChain'] = causeChain;
+                }
+            }
+            this.log('error', message, errorOrData, enrichedData);
         }
         else {
             this.log('error', message, undefined, errorOrData);
@@ -218,6 +249,32 @@ export class Logger {
         for (const transport of this.transports) {
             transport.close();
         }
+    }
+    /**
+     * 开始计时，返回结束函数
+     * 调用结束函数时自动记录操作耗时
+     *
+     * @param operation - 操作名称
+     * @param data - 附加数据
+     * @returns 结束计时的函数
+     *
+     * @example
+     * ```typescript
+     * const endTimer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
+     * // ... 执行操作 ...
+     * endTimer(); // 自动记录: "Operation completed: llm.extractMemories" + durationMs
+     * ```
+     */
+    startTimer(operation, data) {
+        const start = performance.now();
+        return () => {
+            const durationMs = Math.round(performance.now() - start);
+            this.info(`Operation completed: ${operation}`, {
+                ...data,
+                operation,
+                durationMs,
+            });
+        };
     }
 }
 /**

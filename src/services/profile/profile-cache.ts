@@ -66,8 +66,8 @@ export class ProfileCache {
       return undefined;
     }
 
-    // 检查 TTL
-    if (Date.now() - entry.timestamp > this.options.ttl) {
+    // 检查 TTL（使用 lastAccess 而不是 timestamp，以便活跃访问可以续期 TTL）
+    if (Date.now() - entry.lastAccess > this.options.ttl) {
       this.personaCache.delete(userId);
       this.stats.misses++;
       this.logger.debug(`Persona cache miss for ${userId} (expired)`);
@@ -110,8 +110,8 @@ export class ProfileCache {
       return undefined;
     }
 
-    // 检查 TTL
-    if (Date.now() - entry.timestamp > this.options.ttl) {
+    // 检查 TTL（使用 lastAccess 而不是 timestamp，以便活跃访问可以续期 TTL）
+    if (Date.now() - entry.lastAccess > this.options.ttl) {
       this.preferencesCache.delete(userId);
       this.stats.misses++;
       this.logger.debug(`Preferences cache miss for ${userId} (expired)`);
@@ -154,8 +154,8 @@ export class ProfileCache {
       return undefined;
     }
 
-    // 检查 TTL
-    if (Date.now() - entry.timestamp > this.options.ttl) {
+    // 检查 TTL（使用 lastAccess 而不是 timestamp，以便活跃访问可以续期 TTL）
+    if (Date.now() - entry.lastAccess > this.options.ttl) {
       this.tagsCache.delete(userId);
       this.stats.misses++;
       this.logger.debug(`Tags cache miss for ${userId} (expired)`);
@@ -198,8 +198,8 @@ export class ProfileCache {
       return undefined;
     }
 
-    // 检查 TTL
-    if (Date.now() - entry.timestamp > this.options.ttl) {
+    // 检查 TTL（使用 lastAccess 而不是 timestamp，以便活跃访问可以续期 TTL）
+    if (Date.now() - entry.lastAccess > this.options.ttl) {
       this.statsCache.delete(userId);
       this.stats.misses++;
       this.logger.debug(`Stats cache miss for ${userId} (expired)`);
@@ -292,28 +292,28 @@ export class ProfileCache {
     let cleaned = 0;
 
     for (const [key, entry] of this.personaCache) {
-      if (now - entry.timestamp > this.options.ttl) {
+      if (now - entry.lastAccess > this.options.ttl) {
         this.personaCache.delete(key);
         cleaned++;
       }
     }
 
     for (const [key, entry] of this.preferencesCache) {
-      if (now - entry.timestamp > this.options.ttl) {
+      if (now - entry.lastAccess > this.options.ttl) {
         this.preferencesCache.delete(key);
         cleaned++;
       }
     }
 
     for (const [key, entry] of this.tagsCache) {
-      if (now - entry.timestamp > this.options.ttl) {
+      if (now - entry.lastAccess > this.options.ttl) {
         this.tagsCache.delete(key);
         cleaned++;
       }
     }
 
     for (const [key, entry] of this.statsCache) {
-      if (now - entry.timestamp > this.options.ttl) {
+      if (now - entry.lastAccess > this.options.ttl) {
         this.statsCache.delete(key);
         cleaned++;
       }

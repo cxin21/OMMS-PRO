@@ -41,6 +41,8 @@ export interface LogContext {
     roomId?: string;
     memoryId?: string;
     userId?: string;
+    /** 关联 ID，用于跨服务追踪 */
+    correlationId?: string;
     [key: string]: unknown;
 }
 /**
@@ -63,6 +65,12 @@ export interface LogEntry {
     context?: LogContext;
     /** 错误对象（如果有） */
     error?: Error;
+    /** 关联 ID，用于跨服务追踪 */
+    correlationId?: string;
+    /** 操作耗时（毫秒） */
+    durationMs?: number;
+    /** 操作名称 */
+    operation?: string;
 }
 /**
  * 日志配置
@@ -152,6 +160,14 @@ export interface ILogger {
      * 清除上下文
      */
     clearContext(): void;
+    /**
+     * 开始计时，返回结束函数
+     * 调用结束函数时自动记录操作耗时
+     * @param operation - 操作名称
+     * @param data - 附加数据
+     * @returns 结束计时的函数
+     */
+    startTimer(operation: string, data?: Record<string, unknown>): () => void;
 }
 /**
  * 日志传输接口

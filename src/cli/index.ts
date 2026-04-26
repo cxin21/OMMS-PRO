@@ -202,6 +202,8 @@ async function extractFromText(args: string[]): Promise<void> {
       metadata: {
         source: 'cli-extract',
         extractedAt: Date.now(),
+        importance: 5,
+        scopeScore: 5,
       },
     } as any);
 

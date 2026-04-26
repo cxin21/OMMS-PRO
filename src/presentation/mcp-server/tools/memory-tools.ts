@@ -822,7 +822,7 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
 
             // 从 ConfigManager 读取 API 服务器配置
             const { config: appConfig } = await import('../../../shared/config');
-            const apiConfig = appConfig.getConfig<{ port?: number; host?: string }>('memoryService.api');
+            const apiConfig = appConfig.getConfig<{ port?: number; host?: string }>('api');
             const apiHost = apiConfig?.host || 'localhost';
             const apiPort = apiConfig?.port || 3000;
 

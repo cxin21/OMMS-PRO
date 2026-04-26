@@ -36,5 +36,8 @@ export { Logger, AsyncLogger } from './logger';
 export { ConsoleTransport, FileTransport, MultiTransport, createTransport } from './transport';
 export { JsonFormatter, TextFormatter, createFormatter } from './formatter';
 export { LogContextManager, createLogger, getLogger, clearLoggerRegistry, removeLogger } from './context';
+export { createServiceLogger, registerServiceLogConfig } from './service-logger';
+export { sanitizeData, containsSensitiveData } from './sanitizer';
+export { withErrorBoundary, wrapWithErrorBoundary } from './error-boundary';
 // 默认导出
 export { getLogger as default } from './context';

@@ -61,9 +61,17 @@ export declare class TextFormatter implements ILogFormatter {
      */
     private formatMessage;
     /**
-     * 格式化错误
+     * 格式化错误（含堆栈）
      */
     private formatError;
+    /**
+     * 格式化堆栈（来自 data.stack）
+     */
+    private formatStack;
+    /**
+     * 格式化 cause 链
+     */
+    private formatCauseChain;
     /**
      * 格式化附加数据
      */

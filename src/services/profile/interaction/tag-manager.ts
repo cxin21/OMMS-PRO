@@ -246,7 +246,7 @@ export class TagManager {
    */
   mergeSimilarTags(userId: string): number {
     const userTags = this.tags.get(userId) ?? [];
-    const mergedCount = 0;
+    let mergedCount = 0;
 
     // 按名称分组（忽略大小写）
     const tagGroups = new Map<string, UserTag[]>();
@@ -272,6 +272,7 @@ export class TagManager {
           if (tag.id !== bestTag.id) {
             const idx = userTags.findIndex(t => t.id === tag.id);
             if (idx !== -1) userTags.splice(idx, 1);
+            mergedCount++;
           }
         }
       }

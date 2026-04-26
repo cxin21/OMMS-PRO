@@ -15,7 +15,6 @@ import type {
   CapturedMemory,
   MemoryCaptureConfig,
   ExtractedMemory,
-  ConversationTurn,
   DEFAULT_MEMORY_TYPES,
 } from '../../../core/types/memory';
 import { MemoryType } from '../../../core/types/memory';
@@ -334,7 +333,7 @@ this.inclusionDetector = new MemoryInclusionDetector();
     }
 
     // 处理对话轮次
-    const turns = input.content as ConversationTurn[];
+    const turns = input.content as Array<{ role: string; content: string }>;
     return turns
       .map(turn => `${turn.role === 'user' ? '用户' : '助手'}: ${turn.content}`)
       .join('\n');
@@ -430,13 +429,13 @@ this.inclusionDetector = new MemoryInclusionDetector();
       try {
         const versionResult = await this.versionManager.createVersion(
           detection.existingMemoryId,
-          rawSegment,  // 使用原始对话片段，而非 LLM 提炼后的内容
+          originalContent,  // 使用完整对话（Verbatim 原则），而非 rawSegment 片段
           summary,
           scores,
           {
             createdAt: now,
             updatedAt: now,
-            originalSize: rawSegment.length,
+            originalSize: originalContent.length,
             compressed: false,
             encrypted: false,
           },
@@ -461,21 +460,12 @@ this.inclusionDetector = new MemoryInclusionDetector();
             reuseExistingId: detection.existingMemoryId,
           });
 
-          // 使用已提取的 originalContent 进行 palace 存储
-          // 扩大上下文：向前向后各扩展 200 字符
-          const palaceContent = this.expandSourceSegmentContext(
-            item.sourceSegment,
-            item.segmentStart,
-            item.segmentEnd,
-            originalContent
-          );
-
-          // 调用 storeManager.store() 并传递 forcedMemoryId 跳过版本检测
-          // 注意：必须传递 summary 参数，避免 storeManager 内部重复调用 LLM 生成摘要
+          // 直接使用完整对话进行 palace 存储（Verbatim 原则）
+          // 注意：Palace 必须存储完整原始对话，不允许截断
           const memory = await this.storeManager.store(
             {
               content: item.content,  // LLM 提取的片段（用于向量索引）
-              originalContent: palaceContent,  // 使用片段化的原始内容
+              originalContent: originalContent,  // 完整对话（Palace 存储用）
               type: item.type,
               metadata: {
                 agentId: input.agentId,
@@ -506,27 +496,19 @@ this.inclusionDetector = new MemoryInclusionDetector();
       }
     } else {
       // 新建记忆
-      // 使用已提取的 originalContent 进行 palace 存储
-      // 扩大上下文：向前向后各扩展 200 字符
-      const palaceContent = this.expandSourceSegmentContext(
-        item.sourceSegment,
-        item.segmentStart,
-        item.segmentEnd,
-        originalContent
-      );
-
-      this.logger.debug('Storing memory with segment info', {
+      // 直接使用完整对话进行 palace 存储（Verbatim 原则）
+      // 注意：Palace 必须存储完整原始对话，不允许截断
+      this.logger.debug('Storing memory with complete conversation', {
         hasSourceSegment: !!item.sourceSegment,
         segmentStart: item.segmentStart,
         segmentEnd: item.segmentEnd,
-        palaceContentLength: palaceContent.length,
         originalContentLength: originalContent.length,
       });
 
       const memory = await this.storeManager.store(
         {
           content: item.content,  // LLM 提取的片段（用于向量索引）
-          originalContent: palaceContent,  // 使用片段化的原始内容而非完整对话
+          originalContent: originalContent,  // 完整对话（Palace 存储用）
           type: item.type,
           metadata: {
             agentId: input.agentId,
@@ -545,11 +527,9 @@ this.inclusionDetector = new MemoryInclusionDetector();
 
       versionGroupId = memory.uid;
 
-      this.logger.debug('Created new memory with segmented content', {
+      this.logger.debug('Created new memory with complete conversation', {
         memoryId: memory.uid,
-        segmentStart: item.segmentStart,
-        segmentEnd: item.segmentEnd,
-        palaceContentLength: palaceContent.length,
+        originalContentLength: originalContent.length,
       });
     }
 
@@ -601,15 +581,33 @@ this.inclusionDetector = new MemoryInclusionDetector();
     const userId = input.agentId || 'default-user';
 
     // 构建对话轮次格式（用于 PersonaBuilder）
-    // 注意：ConversationTurn 使用 userMessage/assistantResponse，不是 role/content
-    const turns: { userMessage: string; timestamp?: number }[] = [{
-      userMessage: relevantMemories.map(m => m.content).join('\n'),
-      timestamp: Date.now(),
-    }];
+    // 注意：profile/persona/persona-builder.ts 中的 ConversationTurn 使用 userMessage/assistantResponse
+    // 但 memory/core/types/memory.ts 中定义的是 role/content
+    // 需要适配 ProfileManager 期望的格式
+    const now = Date.now();
+    interface ProfileConversationTurn {
+      userMessage: string;
+      assistantResponse?: string;
+      timestamp: number;
+      metadata?: Record<string, any>;
+    }
+
+    const turns: ProfileConversationTurn[] = relevantMemories.map((m, idx) => ({
+      userMessage: m.content,
+      assistantResponse: `Memory importance: ${m.importanceLevel}, type: ${m.type}`,
+      timestamp: now - (relevantMemories.length - idx) * 1000,  // 递减时间戳模拟对话顺序
+      metadata: {
+        memoryType: m.type,
+      },
+    }));
 
     try {
       // 调用 ProfileManager 的 buildPersonaFromConversation
-      const persona = await this.profileManager!.buildPersonaFromConversation(userId, turns as any);
+      // turns 格式符合 profile/persona-builder.ts 的 ConversationTurn 期望
+      const persona = await this.profileManager!.buildPersonaFromConversation(
+        userId,
+        turns as any
+      );
       this.logger.info('Auto profile updated', {
         userId,
         personaVersion: persona.version,

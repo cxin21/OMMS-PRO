@@ -313,13 +313,13 @@ export class MemoryStoreManager {
       try {
         const versionResult = await this.versionManager.createVersion(
           versionDetection.existingMemoryId,
-          input.content,
+          input.originalContent || input.content,  // 必须传完整对话，不能只传 LLM 提取的片段
           summary,
           scores,
           {
             createdAt: now,
             updatedAt: now,
-            originalSize: input.content.length,
+            originalSize: (input.originalContent || input.content).length,
             compressed: false,
             encrypted: false,
           },

@@ -48,6 +48,12 @@ export declare class Logger implements ILogger {
     warn(message: string, data?: Record<string, unknown>): void;
     /**
      * 记录 error 级别日志
+     *
+     * 自动捕获并输出：
+     * - Error 名称和消息
+     * - 完整调用堆栈
+     * - cause 链（如果存在）
+     * - 附加上下文数据
      */
     error(message: string, errorOrData?: Error | Record<string, unknown>, data?: Record<string, unknown>): void;
     /**
@@ -102,6 +108,22 @@ export declare class Logger implements ILogger {
      * 关闭日志器
      */
     close(): void;
+    /**
+     * 开始计时，返回结束函数
+     * 调用结束函数时自动记录操作耗时
+     *
+     * @param operation - 操作名称
+     * @param data - 附加数据
+     * @returns 结束计时的函数
+     *
+     * @example
+     * ```typescript
+     * const endTimer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
+     * // ... 执行操作 ...
+     * endTimer(); // 自动记录: "Operation completed: llm.extractMemories" + durationMs
+     * ```
+     */
+    startTimer(operation: string, data?: Record<string, unknown>): () => void;
 }
 /**
  * 异步日志器（支持队列缓冲）

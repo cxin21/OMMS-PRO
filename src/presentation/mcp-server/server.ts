@@ -69,7 +69,10 @@ export class MCPServer {
     // 如果没有传入配置，尝试从 ConfigManager 获取
     try {
       if (config.isInitialized()) {
-        baseConfig = config.getConfig<MCPServerConfig>('mcp');
+        const mcpConfig = config.getConfig<MCPServerConfig>('mcp');
+        if (mcpConfig) {
+          baseConfig = { ...DEFAULT_MCP_CONFIG, ...mcpConfig };
+        }
       }
     } catch {
       // ConfigManager 未初始化或获取配置失败，使用默认配置
