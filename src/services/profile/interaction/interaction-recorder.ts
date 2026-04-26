@@ -487,9 +487,9 @@ export class InteractionRecorder {
     let deletedCount = 0;
     for (const interaction of interactions) {
       try {
-        // 从 SQLite 删除
+        // 从 SQLite 删除（better-sqlite3 是同步 API，无需 await）
         if (this.db) {
-          await this.db.prepare('DELETE FROM user_interactions WHERE id = ?').run(interaction.id);
+          this.db.prepare('DELETE FROM user_interactions WHERE id = ?').run(interaction.id);
         }
         deletedCount++;
       } catch (error) {

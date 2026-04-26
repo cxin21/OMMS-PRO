@@ -278,7 +278,7 @@ export class MemoryStoreManager {
     const DEFAULT_EXTRACTION_TIMEOUT = 30000;
     let extractionTimeout = DEFAULT_EXTRACTION_TIMEOUT;
     if (config.isInitialized()) {
-      const captureConfig = config.getConfig<{ extractionTimeout?: number }>('capture');
+      const captureConfig = config.getConfig<{ extractionTimeout?: number }>('memoryService.capture');
       if (captureConfig?.extractionTimeout !== undefined) {
         extractionTimeout = captureConfig.extractionTimeout;
       }

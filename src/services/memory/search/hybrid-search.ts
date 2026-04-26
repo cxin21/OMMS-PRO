@@ -20,9 +20,11 @@ const CHINESE_TOKEN_RE = /[\u4e00-\u9fa5]{2,}/g;
 // 英文正则：连续 2+ 个字母/数字字符
 const ENGLISH_TOKEN_RE = /[a-zA-Z0-9]{2,}/g;
 
+// 注意：这些默认值应与 config.default.json 中 memoryService.recall 的配置保持一致
+// vectorWeight: 0.7, keywordWeight: 0.3
 const DEFAULT_CONFIG = {
-  vectorWeight: 0.6,
-  bm25Weight: 0.4,
+  vectorWeight: 0.7,
+  bm25Weight: 0.3,
   k1: 1.5,
   b: 0.75,
   minTokenLength: 2,
