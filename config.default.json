@@ -47,7 +47,8 @@
     },
     "performance": {
       "enableCompression": true,
-      "maxRequestBodySize": "10mb"
+      "maxRequestBodySize": "10mb",
+      "webUIPath": "./dist/web-ui"
     }
   },
   "mcp": {
@@ -89,6 +90,8 @@
       "chunkThreshold": 500,
       "defaultType": "event",
       "summaryMaxLength": 200,
+      "defaultImportance": 5,
+      "defaultScopeScore": 5,
       "scopeUpgradeThresholds": {
         "sessionToAgentImportance": 5,
         "agentToGlobalScopeScore": 10,

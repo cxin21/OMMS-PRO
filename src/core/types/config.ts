@@ -129,6 +129,7 @@ export interface APIConfig {
   auth: APIAuthConfig;
   security: APISecurityConfig;
   performance: APIPerformanceConfig;
+  webUIPath?: string;
 }
 
 // ============================================================================

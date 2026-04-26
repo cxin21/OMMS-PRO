@@ -197,9 +197,12 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
       }
 
       // 直接存储模式（短内容或没有 captureService）
+      const storeConfig = config.getConfig<{ defaultImportance?: number; defaultScopeScore?: number }>('memoryService.store');
+      const defaultImportance = storeConfig?.defaultImportance ?? 5;
+      const defaultScopeScore = storeConfig?.defaultScopeScore ?? defaultImportance;
       const finalScores = {
-        importance: scores?.importance ?? 5,
-        scopeScore: scores?.scopeScore ?? scores?.importance ?? 5,
+        importance: scores?.importance ?? defaultImportance,
+        scopeScore: scores?.scopeScore ?? scores?.importance ?? defaultScopeScore,
       };
 
       const memory = await deps.memoryService.store(

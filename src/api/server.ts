@@ -190,8 +190,14 @@ export class RESTAPIServer {
    * req.path 已经不包含 /api 前缀，因此需要检查 /v1 等 API 版本前缀
    */
   private setupStaticFiles(): void {
-    // 使用 process.cwd() 保证从项目根目录定位，避免 tsx/import.meta.url 路径偏差
-    const webUIPath = path.join(process.cwd(), 'dist/web-ui');
+    // 从配置读取 webUIPath，默认使用 ./dist/web-ui
+    const apiConfig = config.getConfig<{ webUIPath?: string }>('api');
+    const defaultWebUIPath = path.join(process.cwd(), 'dist/web-ui');
+    const webUIPath = apiConfig?.webUIPath
+      ? path.isAbsolute(apiConfig.webUIPath)
+        ? apiConfig.webUIPath
+        : path.join(process.cwd(), apiConfig.webUIPath)
+      : defaultWebUIPath;
     this.logger.debug(`Web UI path: ${webUIPath}`);
 
     this.app.use(express.static(webUIPath));
