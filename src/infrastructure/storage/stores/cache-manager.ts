@@ -42,10 +42,14 @@ export class CacheManager implements ICacheManager {
       if (config.isInitialized()) {
         const managerCacheConfig = config.getConfig<{ maxSize: number; ttl: number; evictionPolicy?: string }>('memoryService.cache');
         if (managerCacheConfig) {
+          // 验证 evictionPolicy 只接受 'lru' 或 'lfu'
+          const validPolicies = ['lru', 'lfu'];
+          const policy = managerCacheConfig.evictionPolicy;
+          const isValidPolicy = policy && validPolicies.includes(policy);
           resolvedConfig = {
             maxSize: managerCacheConfig.maxSize ?? DEFAULT_CACHE_CONFIG.maxSize,
             ttl: managerCacheConfig.ttl ?? DEFAULT_CACHE_CONFIG.ttl,
-            evictionPolicy: (managerCacheConfig.evictionPolicy as 'lru' | 'lfu') ?? DEFAULT_CACHE_CONFIG.evictionPolicy,
+            evictionPolicy: isValidPolicy ? policy as 'lru' | 'lfu' : DEFAULT_CACHE_CONFIG.evictionPolicy,
           };
         }
       }
