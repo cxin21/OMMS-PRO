@@ -66,6 +66,7 @@ export const EMOTION_CODES: Record<string, string> = {
 
 // 情感关键词信号
 const _EMOTION_SIGNALS: Record<string, string> = {
+  // 英文情感关键词
   decided: 'determ',
   prefer: 'convict',
   worried: 'anx',
@@ -87,10 +88,26 @@ const _EMOTION_SIGNALS: Record<string, string> = {
   relieved: 'relief',
   disappoint: 'grief',
   concern: 'anx',
+  // 中文情感关键词
+  '决定': 'determ',
+  '喜欢': 'joy',
+  '讨厌': 'rage',
+  '担心': 'anx',
+  '希望': 'hope',
+  '相信': 'trust',
+  '惊讶': 'surprise',
+  '满意': 'satis',
+  '兴奋': 'excite',
+  '感激': 'grat',
+  '失望': 'despair',
+  '困惑': 'confuse',
+  '后悔': 'grief',
+  '害怕': 'fear',
 };
 
 // 标记信号
 const _FLAG_SIGNALS: Record<string, string> = {
+  // 英文标记关键词
   decided: 'DECISION',
   chose: 'DECISION',
   switched: 'DECISION',
@@ -125,6 +142,29 @@ const _FLAG_SIGNALS: Record<string, string> = {
   framework: 'TECHNICAL',
   server: 'TECHNICAL',
   config: 'TECHNICAL',
+  // 中文标记关键词
+  '决定': 'DECISION',
+  '选择': 'DECISION',
+  '因为': 'DECISION',
+  '所以': 'DECISION',
+  '创建': 'ORIGIN',
+  '开始': 'ORIGIN',
+  '启动': 'ORIGIN',
+  '诞生': 'ORIGIN',
+  '核心': 'CORE',
+  '基础': 'CORE',
+  '本质': 'CORE',
+  '原则': 'CORE',
+  '转折点': 'PIVOT',
+  '改变': 'PIVOT',
+  '突破': 'PIVOT',
+  '意识到': 'PIVOT',
+  '技术': 'TECHNICAL',
+  '架构': 'TECHNICAL',
+  '算法': 'TECHNICAL',
+  '部署': 'TECHNICAL',
+  '数据库': 'TECHNICAL',
+  '服务器': 'TECHNICAL',
 };
 
 // 停用词
@@ -229,9 +269,13 @@ export function extractTopics(text: string, maxTopics: number = 3): string[] {
 export function extractKeySentence(text: string, maxLength: number = 55): string {
   // 决策关键词
   const decisionWords = [
+    // 英文决策关键词
     'decided', 'because', 'instead', 'prefer', 'switched', 'chose',
     'realized', 'important', 'key', 'critical', 'discovered', 'learned',
     'conclusion', 'solution', 'reason', 'why', 'breakthrough', 'insight',
+    // 中文决策关键词
+    '决定', '选择', '因为', '所以', '重要的是',
+    '发现', '学到了', '解决方案', '原因', '结果',
   ];
 
   // 分割句子

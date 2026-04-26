@@ -15,7 +15,10 @@ import type { ILogger } from '../../../shared/logging';
 // 常量
 // ============================================================
 
-const TOKEN_RE = /\w{2,}/gu;
+// 中文正则：连续 2+ 个汉字作为一个词
+const CHINESE_TOKEN_RE = /[\u4e00-\u9fa5]{2,}/g;
+// 英文正则：连续 2+ 个字母/数字字符
+const ENGLISH_TOKEN_RE = /[a-zA-Z0-9]{2,}/g;
 
 const DEFAULT_CONFIG = {
   vectorWeight: 0.6,
@@ -51,21 +54,32 @@ export interface HybridSearchConfig {
 // ============================================================
 
 /**
- * 分词
+ * 分词 - 支持中文和英文
  */
 function tokenize(text: string): string[] {
   const tokens: string[] = [];
-  let match: RegExpExecArray | null;
 
-  const re = new RegExp(TOKEN_RE.source, TOKEN_RE.flags);
-  while ((match = re.exec(text)) !== null) {
+  // 处理中文词（连续汉字）
+  let match: RegExpExecArray | null;
+  const chineseRe = new RegExp(CHINESE_TOKEN_RE.source, CHINESE_TOKEN_RE.flags);
+  while ((match = chineseRe.exec(text)) !== null) {
     const token = match[0].toLowerCase();
     if (token.length >= DEFAULT_CONFIG.minTokenLength) {
       tokens.push(token);
     }
   }
 
-  return tokens;
+  // 处理英文词
+  const englishRe = new RegExp(ENGLISH_TOKEN_RE.source, ENGLISH_TOKEN_RE.flags);
+  while ((match = englishRe.exec(text)) !== null) {
+    const token = match[0].toLowerCase();
+    if (token.length >= DEFAULT_CONFIG.minTokenLength) {
+      tokens.push(token);
+    }
+  }
+
+  // 使用 Set 去重，保持顺序
+  return Array.from(new Set(tokens));
 }
 
 /**

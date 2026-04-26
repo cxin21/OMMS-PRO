@@ -82,6 +82,11 @@ interface ExecuteResult {
   memoriesDeleted: number;
   relationsRebuilt: number;
   storageFreed: number;
+  // Consolidation results (date-based memory consolidation)
+  consolidationProcessedCount?: number;
+  consolidationGroupsFormed?: number;
+  consolidationNewVersions?: number;
+  consolidationArchivedOldVersions?: number;
 }
 
 /**
@@ -347,6 +352,12 @@ export class DreamingManager {
       report.relationsRebuilt = executeResult.relationsRebuilt;
       report.storageFreed = executeResult.storageFreed;
 
+      // Include consolidation results in report
+      report.consolidationProcessedCount = executeResult.consolidationProcessedCount;
+      report.consolidationGroupsFormed = executeResult.consolidationGroupsFormed;
+      report.consolidationNewVersions = executeResult.consolidationNewVersions;
+      report.consolidationArchivedOldVersions = executeResult.consolidationArchivedOldVersions;
+
       report.status = OrganizationStatus.COMPLETED;
       report.totalDuration = Date.now() - startTime;
 
@@ -357,6 +368,10 @@ export class DreamingManager {
         memoriesDeleted: report.memoriesDeleted,
         relationsRebuilt: report.relationsRebuilt,
         storageFreed: report.storageFreed,
+        consolidationProcessedCount: report.consolidationProcessedCount,
+        consolidationGroupsFormed: report.consolidationGroupsFormed,
+        consolidationNewVersions: report.consolidationNewVersions,
+        consolidationArchivedOldVersions: report.consolidationArchivedOldVersions,
         totalDuration: report.totalDuration,
       });
 
@@ -1236,6 +1251,24 @@ export class DreamingManager {
     // [dream:1110] relationsRebuilt updated
     this.logger.debug('[dream:1111] New relations supplemented', { newRelations, totalRelationsRebuilt: result.relationsRebuilt });
     // [dream:1112] Supplement results logged
+
+    // Execute date-based memory consolidation (Phase 3 extension)
+    // This consolidates today's memories using LLM if available
+    const consolidationStart = Date.now();
+    const consolidationResult = await this.consolidateMemories();
+    if (this.llmExtractor) {
+      result.consolidationProcessedCount = consolidationResult.processedCount;
+      result.consolidationGroupsFormed = consolidationResult.groupsFormed;
+      result.consolidationNewVersions = consolidationResult.newVersionsCreated;
+      result.consolidationArchivedOldVersions = consolidationResult.archivedOldVersions;
+      this.logger.debug('[dream:1113] Daily consolidation completed', {
+        processedCount: consolidationResult.processedCount,
+        groupsFormed: consolidationResult.groupsFormed,
+        newVersionsCreated: consolidationResult.newVersionsCreated,
+        archivedOldVersions: consolidationResult.archivedOldVersions,
+        duration: Date.now() - consolidationStart,
+      });
+    }
 
     this.logger.debug('[dream:1114] Phase 3: EXECUTE completed', {
       memoriesMerged: result.memoriesMerged,

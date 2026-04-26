@@ -213,6 +213,12 @@ export interface OrganizationReport {
   relationsRebuilt: number;
   storageFreed: number;  // bytes
 
+  /** 日期维度归纳整理结果 (dream Phase 3 extension) */
+  consolidationProcessedCount?: number;
+  consolidationGroupsFormed?: number;
+  consolidationNewVersions?: number;
+  consolidationArchivedOldVersions?: number;
+
   /** 执行时间 */
   executedAt: number;
   totalDuration: number;  // ms
