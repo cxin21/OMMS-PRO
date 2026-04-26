@@ -228,7 +228,7 @@ const DEFAULT_RECALL_CONFIG: RecallConfig = {
   includeVersionChain: true,
   defaultLimit: 20,
   maxLimit: 100,
-  scopeBoost: 0.6,  // 与 config.json memoryService.reinforce.accessWeight 一致
+  scopeBoost: 0.6,  // Fallback when config.memoryService.reinforcement.scopeBoost unavailable
 };
 
 // ============================================================
