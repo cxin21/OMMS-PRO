@@ -513,16 +513,16 @@ export class ProfileManager {
     return this.interactionRecorder.getInteractionHistory(userId, options);
   }
 
-  getUserStats(userId: string): UserStats {
+  async getUserStats(userId: string): Promise<UserStats> {
     // 尝试从缓存获取
-    const cached = this.cache.getUserStats(userId);
+    const cached = await this.cache.getUserStats(userId);
     if (cached) {
       return cached;
     }
 
     // 计算统计
     const stats = this.interactionRecorder.getUserStats(userId);
-    
+
     // 缓存
     this.cache.setUserStats(userId, stats);
 
@@ -533,16 +533,16 @@ export class ProfileManager {
    * 用户标签
    */
 
-  getTags(userId: string, category?: TagCategory): UserTag[] {
+  async getTags(userId: string, category?: TagCategory): Promise<UserTag[]> {
     // 尝试从缓存获取
-    const cached = this.cache.getTags(userId);
+    const cached = await this.cache.getTags(userId);
     if (cached && !category) {
       return cached;
     }
 
     // 从存储获取
     const tags = this.tagManager.getTags(userId, category);
-    
+
     if (!category) {
       this.cache.setTags(userId, tags);
     }
@@ -550,15 +550,15 @@ export class ProfileManager {
     return tags;
   }
 
-  addTag(
+  async addTag(
     userId: string,
     name: string,
     category: TagCategory,
     source: TagSource = 'manual',
     confidence?: number,
     weight?: number
-  ): UserTag {
-    const tag = this.tagManager.addTag(
+  ): Promise<UserTag> {
+    const tag = await this.tagManager.addTag(
       userId,
       name,
       category,
@@ -573,8 +573,8 @@ export class ProfileManager {
     return tag;
   }
 
-  removeTag(userId: string, tagId: string): void {
-    this.tagManager.removeTag(userId, tagId);
+  async removeTag(userId: string, tagId: string): Promise<void> {
+    await this.tagManager.removeTag(userId, tagId);
 
     // 清除标签缓存
     this.cache.invalidateUser(userId);
@@ -678,7 +678,7 @@ export class ProfileManager {
     }
 
     if (options?.includeTags !== false) {
-      const tags = this.getTags(userId);
+      const tags = await this.getTags(userId);
       if (tags.length > 0) {
         exportData.tags = tags;
       }
@@ -769,11 +769,11 @@ export class ProfileManager {
       : undefined;
     
     const stats = options?.includeStats !== false
-      ? this.getUserStats(userId)
+      ? await this.getUserStats(userId)
       : undefined;
-    
+
     const tags = options?.includeTags !== false
-      ? this.getTags(userId)
+      ? await this.getTags(userId)
       : undefined;
 
     // 生成洞察
@@ -824,8 +824,8 @@ export class ProfileManager {
     // L1 - Critical Facts
     if (userId) {
       const preferences = await this.getPreferences(userId);
-      const tags = this.getTags(userId);
-      const stats = this.getUserStats(userId);
+      const tags = await this.getTags(userId);
+      const stats = await this.getUserStats(userId);
 
       const criticalFacts = this.buildCriticalFactsContext(preferences, tags, stats);
       if (criticalFacts) {

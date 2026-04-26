@@ -140,6 +140,8 @@ export class StorageMemoryService {
         highPriorityThreshold: indexUpdateConfig.highPriorityThreshold ?? 0.8,
         scheduledIntervalMs: indexUpdateConfig.scheduledIntervalMs ?? 60000,
         maxRetries: indexUpdateConfig.maxRetries ?? 3,
+        baseRetryDelayMs: indexUpdateConfig.baseRetryDelayMs ?? 1000,
+        maxRetryDelayMs: indexUpdateConfig.maxRetryDelayMs ?? 60000,
       });
       this.logger.info('IndexUpdateStrategy initialized');
     }
@@ -240,6 +242,7 @@ export class StorageMemoryService {
       await this.indexUpdateStrategy.submitTask({
         id: `idx_${Date.now()}_${memory.uid}`,
         memoryId: memory.uid,
+        type: 'vector_update',
         operation: 'add',
         priority: 'normal',
       });
@@ -503,6 +506,7 @@ export class StorageMemoryService {
         await this.indexUpdateStrategy.submitTask({
           id: `idx_${Date.now()}_${memoryId}`,
           memoryId,
+          type: 'vector_update',
           operation: 'update',
           priority: 'normal',
         });
@@ -535,6 +539,7 @@ export class StorageMemoryService {
       await this.indexUpdateStrategy.submitTask({
         id: `idx_${Date.now()}_${memoryId}`,
         memoryId,
+        type: 'meta_update',
         operation: 'update',
         priority: 'low',
       });
@@ -554,6 +559,7 @@ export class StorageMemoryService {
       await this.indexUpdateStrategy.submitTask({
         id: `idx_${Date.now()}_${memoryId}`,
         memoryId,
+        type: 'vector_update',
         operation: 'delete',
         priority: 'high',
       });
@@ -938,6 +944,7 @@ export class StorageMemoryService {
       await this.indexUpdateStrategy.submitTask({
         id: `idx_${Date.now()}_${memoryId}`,
         memoryId,
+        type: 'vector_update',
         operation: 'delete',
         priority: 'high',
       });
@@ -1082,6 +1089,7 @@ export class StorageMemoryService {
     await this.indexUpdateStrategy.submitTask({
       id: `idx_${Date.now()}_${memoryId}`,
       memoryId,
+      type: 'meta_update',
       operation,
       priority,
     });

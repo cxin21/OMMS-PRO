@@ -11,6 +11,10 @@
 
 import { createLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
+import { FileUtils } from '../../../shared/utils/file';
+import { dirname } from 'path';
+import Database from 'better-sqlite3';
+import { config } from '../../../shared/config';
 
 export interface DynamicRoomManagerConfig {
   /** 合并阈值：记忆数低于此值则合并 */
@@ -62,6 +66,14 @@ export interface Room {
   embeddings: number[];
 }
 
+interface RoomClusterRecord {
+  clusterId: string;
+  centroidEmbedding: Buffer;
+  memberUids: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 /**
  * DynamicRoomManager
  *
@@ -71,12 +83,126 @@ export class DynamicRoomManager {
   private logger: ILogger;
   private rooms: Map<string, Room> = new Map();
   private roomMembers: Map<string, Set<string>> = new Map();
+  private db: Database.Database | null = null;
+  private dbPath: string = '';
+  private initialized: boolean = false;
 
   constructor(
     private embeddingService: (text: string) => Promise<number[]>,
     private config: DynamicRoomManagerConfig
   ) {
     this.logger = createLogger('DynamicRoomManager');
+  }
+
+  /**
+   * 初始化数据库连接和表结构
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      const storageConfig = config.getConfigOrThrow<{ roomClusterDbPath: string }>('memoryService.storage');
+      this.dbPath = storageConfig.roomClusterDbPath;
+
+      await FileUtils.ensureDirectory(dirname(this.dbPath));
+
+      this.db = new Database(this.dbPath);
+
+      // Create table
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS room_clusters (
+          clusterId TEXT PRIMARY KEY,
+          centroidEmbedding BLOB,
+          memberUids TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        )
+      `);
+
+      // Create index
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_clusters_updatedAt ON room_clusters(updatedAt)
+      `);
+
+      // Load existing clusters into memory
+      this.loadClustersFromDb();
+
+      this.initialized = true;
+      this.logger.info('DynamicRoomManager initialized', { dbPath: this.dbPath });
+    } catch (error) {
+      this.logger.error('Failed to initialize DynamicRoomManager', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * 从 SQLite 加载聚类到内存
+   */
+  private loadClustersFromDb(): void {
+    if (!this.db) return;
+
+    try {
+      const stmt = this.db.prepare('SELECT * FROM room_clusters');
+      const rows = stmt.all() as RoomClusterRecord[];
+
+      for (const row of rows) {
+        const room: Room = {
+          id: row.clusterId,
+          name: row.clusterId,
+          createdAt: row.createdAt,
+          embeddings: row.centroidEmbedding ? Array.from(new Float32Array(row.centroidEmbedding.buffer)) : []
+        };
+        this.rooms.set(row.clusterId, room);
+
+        const members: string[] = JSON.parse(row.memberUids);
+        this.roomMembers.set(row.clusterId, new Set(members));
+      }
+
+      this.logger.info('Loaded room clusters from database', { count: rows.length });
+    } catch (error) {
+      this.logger.error('Failed to load clusters from database', { error });
+    }
+  }
+
+  /**
+   * 将聚类同步写入 SQLite
+   */
+  private syncClusterToDb(roomId: string): void {
+    if (!this.db) return;
+
+    try {
+      const room = this.rooms.get(roomId);
+      const members = this.roomMembers.get(roomId);
+
+      if (!room) {
+        // Delete if room no longer exists
+        const deleteStmt = this.db.prepare('DELETE FROM room_clusters WHERE clusterId = ?');
+        deleteStmt.run(roomId);
+        return;
+      }
+
+      const centroidEmbedding = Buffer.from(new Float32Array(room.embeddings));
+      const memberUids = JSON.stringify(Array.from(members || []));
+
+      const upsertStmt = this.db.prepare(`
+        INSERT INTO room_clusters (clusterId, centroidEmbedding, memberUids, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(clusterId) DO UPDATE SET
+          centroidEmbedding = excluded.centroidEmbedding,
+          memberUids = excluded.memberUids,
+          updatedAt = excluded.updatedAt
+      `);
+
+      upsertStmt.run(
+        roomId,
+        centroidEmbedding,
+        memberUids,
+        room.createdAt,
+        Date.now()
+      );
+    } catch (error) {
+      this.logger.error('Failed to sync cluster to database', { roomId, error });
+    }
   }
 
   /**
@@ -87,6 +213,8 @@ export class DynamicRoomManager {
    * 3. 返回相似度最高的 Room 列表
    */
   async recommendRooms(content: string, limit?: number): Promise<RoomRecommendation[]> {
+    await this.ensureInitialized();
+
     try {
       // 1. Get content embedding
       const contentEmbedding = await this.embeddingService(content);
@@ -132,6 +260,8 @@ export class DynamicRoomManager {
    * 3. 删除被吸收的 Room
    */
   async mergeRooms(roomIds: string[]): Promise<MergeResult> {
+    await this.ensureInitialized();
+
     if (roomIds.length < 2) {
       this.logger.warn('Cannot merge less than 2 rooms', { roomIds });
       return { success: false, mergedRoomId: '', absorbedRoomIds: [], memoryCount: 0 };
@@ -174,6 +304,12 @@ export class DynamicRoomManager {
         absorbedRoomIds.push(roomIds[i]);
       }
 
+      // Sync to database
+      this.syncClusterToDb(mergedRoomId);
+      for (const absorbedId of absorbedRoomIds) {
+        this.syncClusterToDb(absorbedId);
+      }
+
       this.logger.info('Rooms merged successfully', {
         mergedRoomId,
         absorbedRoomIds,
@@ -199,6 +335,8 @@ export class DynamicRoomManager {
    * 使用简单的轮询分配算法将成员分散到新 Room
    */
   async splitRoom(roomId: string): Promise<SplitResult> {
+    await this.ensureInitialized();
+
     const members = this.roomMembers.get(roomId);
 
     if (!members || members.size < this.config.splitThreshold) {
@@ -252,6 +390,12 @@ export class DynamicRoomManager {
       this.roomMembers.delete(roomId);
       this.rooms.delete(roomId);
 
+      // Sync to database
+      this.syncClusterToDb(roomId);
+      for (const newRoomId of newRoomIds) {
+        this.syncClusterToDb(newRoomId);
+      }
+
       this.logger.info('Room split successfully', {
         originalRoomId: roomId,
         newRoomIds,
@@ -274,6 +418,8 @@ export class DynamicRoomManager {
    * 获取 Room 统计信息
    */
   async getRoomStats(roomId: string): Promise<RoomStats | null> {
+    await this.ensureInitialized();
+
     const room = this.rooms.get(roomId);
     const members = this.roomMembers.get(roomId);
 
@@ -294,49 +440,70 @@ export class DynamicRoomManager {
    * 获取所有 Room 列表
    */
   async getAllRooms(): Promise<Room[]> {
+    await this.ensureInitialized();
     return Array.from(this.rooms.values());
   }
 
   /**
    * 添加一个新的 Room
    */
-  addRoom(room: Room): void {
+  async addRoom(room: Room): Promise<void> {
+    await this.ensureInitialized();
     this.rooms.set(room.id, room);
     if (!this.roomMembers.has(room.id)) {
       this.roomMembers.set(room.id, new Set());
     }
+    this.syncClusterToDb(room.id);
     this.logger.debug('Room added', { roomId: room.id, roomName: room.name });
   }
 
   /**
    * 将记忆添加到 Room
    */
-  addMemberToRoom(roomId: string, memoryId: string): void {
+  async addMemberToRoom(roomId: string, memoryId: string): Promise<void> {
+    await this.ensureInitialized();
     if (!this.roomMembers.has(roomId)) {
       this.roomMembers.set(roomId, new Set());
     }
     this.roomMembers.get(roomId)!.add(memoryId);
+    this.syncClusterToDb(roomId);
   }
 
   /**
    * 从 Room 移除记忆
    */
-  removeMemberFromRoom(roomId: string, memoryId: string): void {
+  async removeMemberFromRoom(roomId: string, memoryId: string): Promise<void> {
+    await this.ensureInitialized();
     this.roomMembers.get(roomId)?.delete(memoryId);
+    this.syncClusterToDb(roomId);
   }
 
   /**
    * 检查 Room 是否存在
    */
-  hasRoom(roomId: string): boolean {
+  async hasRoom(roomId: string): Promise<boolean> {
+    await this.ensureInitialized();
     return this.rooms.has(roomId);
   }
 
   /**
    * 获取 Room 成员数量
    */
-  getMemberCount(roomId: string): number {
+  async getMemberCount(roomId: string): Promise<number> {
+    await this.ensureInitialized();
     return this.roomMembers.get(roomId)?.size ?? 0;
+  }
+
+  /**
+   * 关闭数据库连接
+   */
+  async close(): Promise<void> {
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
+    this.initialized = false;
+    this.logger.info('DynamicRoomManager closed');
   }
 
   /**

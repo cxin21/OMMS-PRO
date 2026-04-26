@@ -11,3 +11,15 @@ export {
   type SearchResult,
   type HybridSearchConfig,
 } from './hybrid-search';
+
+/**
+ * AAAK Prescreen Module
+ *
+ * AAAK 格式的快速预筛选，用于在向量搜索前过滤候选记忆
+ */
+
+export {
+  prescreenByAAAK,
+  AAAKPrescreener,
+  type AAAKPrescreenResult,
+} from './aaak-prescreen';

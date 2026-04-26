@@ -301,7 +301,7 @@ export class RoomManager {
   /**
    * 检查 Room 是否存在
    */
-  hasRoom(roomId: string): boolean {
+  async hasRoom(roomId: string): Promise<boolean> {
     return this.dynamicRoomManager.hasRoom(roomId);
   }
 
@@ -314,9 +314,9 @@ export class RoomManager {
    */
   async addMemoryToRoom(memoryId: string, roomId: string): Promise<boolean> {
     // First add to DynamicRoomManager
-    if (!this.dynamicRoomManager.hasRoom(roomId)) {
+    if (!(await this.dynamicRoomManager.hasRoom(roomId))) {
       // Create the room if it doesn't exist
-      this.dynamicRoomManager.addRoom({
+      await this.dynamicRoomManager.addRoom({
         id: roomId,
         name: roomId,
         createdAt: Date.now(),

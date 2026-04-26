@@ -15,9 +15,12 @@ import type { ILogger } from '../../shared/logging';
 export type IndexUpdateMode = 'immediate' | 'batch' | 'scheduled';
 export type IndexPriority = 'high' | 'normal' | 'low';
 
+export type IndexUpdateTaskType = 'vector_update' | 'meta_update' | 'index_rebuild';
+
 export interface IndexUpdateTask {
   id: string;
   memoryId: string;
+  type: IndexUpdateTaskType;
   operation: 'add' | 'update' | 'delete';
   priority: IndexPriority;
   createdAt: number;
@@ -25,6 +28,9 @@ export interface IndexUpdateTask {
   retryCount: number;
   maxRetries: number;
   error?: string;
+  // For batch aggregation
+  vectors?: Array<{ id: string; memoryId: string; vector: number[]; metadata?: Record<string, unknown> }>;
+  metas?: Array<{ id: string; memoryId: string; metadata: Record<string, unknown> }>;
 }
 
 export interface IndexUpdateStrategyConfig {
@@ -42,6 +48,23 @@ export interface IndexUpdateStrategyConfig {
   scheduledIntervalMs: number;
   /** 最大重试次数 */
   maxRetries: number;
+  /** 初始重试延迟 (ms) */
+  baseRetryDelayMs: number;
+  /** 最大重试延迟 (ms) */
+  maxRetryDelayMs: number;
+}
+
+/** Interface for vector store operations */
+export interface VectorStoreInterface {
+  upsertBatch(vectors: Array<{ id: string; memoryId: string; vector: number[]; metadata?: Record<string, unknown> }>): Promise<void>;
+  delete(ids: string[]): Promise<void>;
+  rebuildIndex(): Promise<void>;
+}
+
+/** Interface for meta store operations */
+export interface MetaStoreInterface {
+  updateBatch(metas: Array<{ id: string; memoryId: string; metadata: Record<string, unknown> }>): Promise<void>;
+  delete(ids: string[]): Promise<void>;
 }
 
 interface PendingBatch {
@@ -65,6 +88,10 @@ export class IndexUpdateStrategy {
   private isProcessing = false;
   private pendingBatch: PendingBatch | null = null;
 
+  // Batch aggregation: group same-type tasks
+  private aggregationBuffer: Map<IndexUpdateTaskType, IndexUpdateTask[]> = new Map();
+  private aggregationTimer: NodeJS.Timeout | null = null;
+
   // Statistics
   private stats = {
     totalProcessed: 0,
@@ -74,7 +101,11 @@ export class IndexUpdateStrategy {
     lastFailedAt: 0
   };
 
-  constructor(private config: IndexUpdateStrategyConfig) {
+  constructor(
+    private config: IndexUpdateStrategyConfig,
+    private vectorStore?: VectorStoreInterface,
+    private metaStore?: MetaStoreInterface
+  ) {
     this.logger = createLogger('IndexUpdateStrategy');
 
     if (config.mode === 'scheduled') {
@@ -133,6 +164,148 @@ export class IndexUpdateStrategy {
   async submitBatch(tasks: Array<Omit<IndexUpdateTask, 'createdAt' | 'retryCount' | 'maxRetries'>>): Promise<void> {
     for (const task of tasks) {
       await this.submitTask(task);
+    }
+  }
+
+  /**
+   * 调度更新任务 - 支持批量聚合
+   *
+   * 根据模式处理任务：
+   *   - immediate: 立即执行
+   *   - batch: 聚合到 batchSize 或超时后执行
+   *   - scheduled: 加入调度队列
+   */
+  async scheduleUpdate(task: IndexUpdateTask): Promise<void> {
+    // Add to aggregation buffer based on task type
+    if (!this.aggregationBuffer.has(task.type)) {
+      this.aggregationBuffer.set(task.type, []);
+    }
+    this.aggregationBuffer.get(task.type)!.push(task);
+
+    const tasksForType = this.aggregationBuffer.get(task.type)!;
+
+    this.logger.debug('Schedule update for aggregation', {
+      taskId: task.id,
+      type: task.type,
+      currentBatchSize: tasksForType.length,
+      batchSizeThreshold: this.config.batchSize
+    });
+
+    // Check if batch threshold reached
+    if (tasksForType.length >= this.config.batchSize) {
+      await this.flushAggregationBuffer(task.type);
+    } else {
+      // Start aggregation timer
+      this.startAggregationTimer();
+    }
+  }
+
+  private async flushAggregationBuffer(type?: IndexUpdateTaskType): Promise<void> {
+    this.stopAggregationTimer();
+
+    if (type) {
+      // Flush specific type
+      const tasks = this.aggregationBuffer.get(type) || [];
+      this.aggregationBuffer.set(type, []);
+      await this.executeAggregatedBatch(tasks);
+    } else {
+      // Flush all types
+      for (const [taskType, tasks] of this.aggregationBuffer) {
+        if (tasks.length > 0) {
+          this.aggregationBuffer.set(taskType, []);
+          await this.executeAggregatedBatch(tasks);
+        }
+      }
+    }
+  }
+
+  private async executeAggregatedBatch(tasks: IndexUpdateTask[]): Promise<void> {
+    if (tasks.length === 0) return;
+
+    this.logger.debug('Executing aggregated batch', {
+      count: tasks.length,
+      types: [...new Set(tasks.map(t => t.type))]
+    });
+
+    // Group tasks by type for efficient batch execution
+    const tasksByType = new Map<IndexUpdateTaskType, IndexUpdateTask[]>();
+    for (const task of tasks) {
+      if (!tasksByType.has(task.type)) {
+        tasksByType.set(task.type, []);
+      }
+      tasksByType.get(task.type)!.push(task);
+    }
+
+    // Execute each type group
+    for (const [taskType, typeTasks] of tasksByType) {
+      try {
+        switch (taskType) {
+          case 'vector_update': {
+            const allVectors = typeTasks.flatMap(t => t.vectors || []);
+            if (allVectors.length > 0 && this.vectorStore) {
+              await this.vectorStore.upsertBatch(allVectors);
+            }
+            break;
+          }
+          case 'meta_update': {
+            const allMetas = typeTasks.flatMap(t => t.metas || []);
+            if (allMetas.length > 0 && this.metaStore) {
+              await this.metaStore.updateBatch(allMetas);
+            }
+            break;
+          }
+          case 'index_rebuild': {
+            if (this.vectorStore) {
+              await this.vectorStore.rebuildIndex();
+            }
+            break;
+          }
+        }
+
+        // Mark tasks as processed
+        for (const task of typeTasks) {
+          this.pendingTasks.delete(task.id);
+          this.stats.totalProcessed++;
+          this.stats.lastProcessedAt = Date.now();
+        }
+      } catch (error) {
+        this.logger.error('Aggregated batch execution failed', {
+          type: taskType,
+          error: String(error)
+        });
+
+        // Handle per-task retry for batch failures
+        for (const task of typeTasks) {
+          task.retryCount++;
+          task.error = String(error);
+
+          if (task.retryCount >= task.maxRetries) {
+            this.stats.totalFailed++;
+            this.stats.lastFailedAt = Date.now();
+          } else {
+            this.stats.totalRetried++;
+            // Re-queue for retry
+            this.pendingTasks.set(task.id, task);
+          }
+        }
+      }
+    }
+  }
+
+  private startAggregationTimer(): void {
+    if (this.aggregationTimer) return;
+
+    this.aggregationTimer = setTimeout(() => {
+      this.flushAggregationBuffer().catch(err => {
+        this.logger.error('Aggregation buffer flush failed', { error: String(err) });
+      });
+    }, this.config.batchDelayMs);
+  }
+
+  private stopAggregationTimer(): void {
+    if (this.aggregationTimer) {
+      clearTimeout(this.aggregationTimer);
+      this.aggregationTimer = null;
     }
   }
 
@@ -198,6 +371,7 @@ export class IndexUpdateStrategy {
   async close(): Promise<void> {
     this.stopBatchTimer();
     this.stopScheduledProcessor();
+    this.stopAggregationTimer();
 
     // Flush remaining tasks
     await this.flush();
@@ -378,33 +552,91 @@ export class IndexUpdateStrategy {
   }
 
   /**
-   * Execute a single index update task.
+   * Execute a single index update task with retry logic.
    *
-   * TODO: This is currently a placeholder. The actual implementation should
-   * delegate to the appropriate index/store service based on the task operation:
-   *   - 'add':    Call vectorStore.store() and/or metaStore.create() to add the memory to the index.
-   *   - 'update': Call vectorStore.updateMetadata() and/or metaStore.update() to refresh the index entry.
-   *   - 'delete': Call vectorStore.delete() and/or metaStore.delete() to remove the memory from the index.
+   * Handles three types of tasks:
+   *   - vector_update: Calls vectorStore.upsertBatch() to update vectors
+   *   - meta_update: Calls metaStore.updateBatch() to update metadata
+   *   - index_rebuild: Calls vectorStore.rebuildIndex() to rebuild the entire index
    *
-   * The IndexUpdateStrategy should be injected with (or receive via constructor) a reference to the
-   * storage layer (e.g., VectorStore, MetaStore) to perform these operations.
-   * For now, it logs the task and simulates execution.
+   * Implements exponential backoff retry (up to maxRetries times).
    */
   private async executeTask(task: IndexUpdateTask): Promise<void> {
     this.logger.debug('Executing index task', {
       taskId: task.id,
+      type: task.type,
       operation: task.operation,
       memoryId: task.memoryId
     });
 
-    // Placeholder: simulate index update delay
-    await new Promise(resolve => setTimeout(resolve, 1));
+    let lastError: Error | undefined;
 
-    this.logger.debug('Index task executed (placeholder)', {
-      taskId: task.id,
-      operation: task.operation,
-      memoryId: task.memoryId
-    });
+    for (let attempt = 0; attempt <= task.maxRetries; attempt++) {
+      try {
+        switch (task.type) {
+          case 'vector_update':
+            if (this.vectorStore && task.vectors && task.vectors.length > 0) {
+              await this.vectorStore.upsertBatch(task.vectors);
+              this.logger.debug('Vector batch upsert completed', {
+                count: task.vectors.length,
+                taskId: task.id
+              });
+            }
+            break;
+
+          case 'meta_update':
+            if (this.metaStore && task.metas && task.metas.length > 0) {
+              await this.metaStore.updateBatch(task.metas);
+              this.logger.debug('Meta batch update completed', {
+                count: task.metas.length,
+                taskId: task.id
+              });
+            }
+            break;
+
+          case 'index_rebuild':
+            if (this.vectorStore) {
+              await this.vectorStore.rebuildIndex();
+              this.logger.debug('Index rebuild completed', { taskId: task.id });
+            }
+            break;
+        }
+
+        // Success - no more retry needed
+        return;
+
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn('Index task execution failed', {
+          taskId: task.id,
+          type: task.type,
+          attempt: attempt + 1,
+          maxRetries: task.maxRetries,
+          error: lastError.message
+        });
+
+        if (attempt < task.maxRetries) {
+          // Exponential backoff: baseDelay * 2^attempt, capped at maxRetryDelay
+          const delay = Math.min(
+            this.config.baseRetryDelayMs * Math.pow(2, attempt),
+            this.config.maxRetryDelayMs
+          );
+          this.logger.debug('Retrying index task after delay', {
+            taskId: task.id,
+            delayMs: delay,
+            nextAttempt: attempt + 2
+          });
+          await this.sleep(delay);
+        }
+      }
+    }
+
+    // All retries exhausted
+    throw lastError || new Error(`Index task failed after ${task.maxRetries} retries`);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private async processAllPendingTasks(): Promise<void> {

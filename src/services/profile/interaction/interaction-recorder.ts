@@ -1,10 +1,15 @@
 /**
  * Interaction Recorder - 交互记录器
  *
- * v2.0.0: 使用内存存储，持久化由 MemoryService 处理
+ * v3.0.0: SQLite 持久化支持，append-only 写入
+ *         内存 Map 作为读写缓存，SQLite 作为持久化后端
  */
 
 import { createLogger, type ILogger } from '../../../shared/logging';
+import { config } from '../../../shared/config';
+import { FileUtils } from '../../../shared/utils/file';
+import { dirname } from 'path';
+import Database from 'better-sqlite3';
 import type {
   UserInteraction,
   InteractionType,
@@ -14,21 +19,164 @@ import type {
   UserStats,
 } from '../types';
 
+const INTERACTIONS_DB_PATH_KEY = 'profileService.storage.interactionDbPath';
+const MEMORY_LOAD_LIMIT = 1000;
+
 /**
  * 交互记录器类
- * v2.0.0: 内存存储版本，交互历史由 MemoryCaptureService 捕获
+ * v3.0.0: SQLite 持久化版本，append-only 写入
  */
 export class InteractionRecorder {
   private logger: ILogger;
   // v2.0.0: 使用内存存储
   private interactions: Map<string, UserInteraction[]> = new Map();
+  // v3.0.0: SQLite 数据库
+  private db: InstanceType<typeof Database> | null = null;
+  private initialized: boolean = false;
 
   constructor() {
     this.logger = createLogger('interaction-recorder');
   }
 
   /**
+   * 初始化 SQLite 连接和表结构
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    let dbPath: string;
+    try {
+      const cfg = config.getConfigOrThrow<{ interactionDbPath?: string }>('profileService.storage');
+      dbPath = cfg.interactionDbPath ?? '';
+    } catch {
+      // fallback: use memoryService.storage.profileDbPath
+      try {
+        const cfg = config.getConfigOrThrow<{ profileDbPath?: string }>('memoryService.storage');
+        dbPath = cfg.profileDbPath ?? '';
+      } catch {
+        dbPath = '';
+      }
+    }
+
+    if (!dbPath) {
+      this.logger.warn('InteractionRecorder: no dbPath configured, running in memory-only mode');
+      this.initialized = true;
+      return;
+    }
+
+    try {
+      await FileUtils.ensureDirectory(dirname(dbPath));
+
+      this.db = new Database(dbPath);
+
+      // Create table (idempotent)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS user_interactions (
+          id TEXT PRIMARY KEY,
+          userId TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          input TEXT,
+          output TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          sessionId TEXT,
+          agentId TEXT,
+          memoryIds TEXT NOT NULL DEFAULT '[]',
+          feedback TEXT,
+          sentiment TEXT,
+          tags TEXT NOT NULL DEFAULT '[]'
+        )
+      `);
+
+      // Create indexes (idempotent)
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_ui_userId ON user_interactions(userId);
+        CREATE INDEX IF NOT EXISTS idx_ui_userId_timestamp ON user_interactions(userId, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_ui_userId_type ON user_interactions(userId, type);
+        CREATE INDEX IF NOT EXISTS idx_ui_sessionId ON user_interactions(sessionId);
+        CREATE INDEX IF NOT EXISTS idx_ui_agentId ON user_interactions(agentId);
+        CREATE INDEX IF NOT EXISTS idx_ui_timestamp ON user_interactions(timestamp DESC);
+      `);
+
+      // Load recent interactions into memory per user
+      this.loadRecentIntoMemory();
+
+      this.initialized = true;
+      this.logger.info('InteractionRecorder SQLite initialized', { dbPath });
+    } catch (error) {
+      this.logger.error('Failed to initialize InteractionRecorder SQLite', { error });
+      // fall back to memory-only mode
+      this.db = null;
+      this.initialized = true;
+    }
+  }
+
+  /**
+   * 从 SQLite 加载最近 1000 条到内存 Map（按 timestamp DESC）
+   */
+  private loadRecentIntoMemory(): void {
+    if (!this.db) return;
+
+    try {
+      // Get all distinct userIds
+      const userIds = this.db.prepare(
+        'SELECT DISTINCT userId FROM user_interactions'
+      ).all() as { userId: string }[];
+
+      const loadStmt = this.db.prepare(`
+        SELECT * FROM user_interactions
+        WHERE userId = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `);
+
+      for (const { userId } of userIds) {
+        const rows = loadStmt.all(userId, MEMORY_LOAD_LIMIT) as any[];
+        const parsed = rows.map(this.rowToInteraction);
+        this.interactions.set(userId, parsed);
+      }
+
+      this.logger.debug('Loaded recent interactions into memory', {
+        userCount: userIds.length,
+      });
+    } catch (error) {
+      this.logger.error('Failed to load recent interactions into memory', { error });
+    }
+  }
+
+  /**
+   * SQLite row -> UserInteraction
+   */
+  private rowToInteraction(row: any): UserInteraction {
+    return {
+      id: row.id,
+      userId: row.userId,
+      timestamp: row.timestamp,
+      type: row.type as InteractionType,
+      input: row.input ?? undefined,
+      output: row.output ?? undefined,
+      metadata: JSON.parse(row.metadata || '{}'),
+      sessionId: row.sessionId ?? undefined,
+      agentId: row.agentId ?? undefined,
+      memoryIds: JSON.parse(row.memoryIds || '[]'),
+      feedback: row.feedback ? JSON.parse(row.feedback) : undefined,
+      sentiment: row.sentiment ? JSON.parse(row.sentiment) : undefined,
+      tags: JSON.parse(row.tags || '[]'),
+    };
+  }
+
+  /**
+   * 确保已初始化
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+  }
+
+  /**
    * 记录交互
+   * v3.0.0: 同步写入 SQLite（append-only），然后更新内存 Map
    */
   async recordInteraction(
     userId: string,
@@ -40,6 +188,8 @@ export class InteractionRecorder {
     agentId?: string,
     memoryIds?: string[]
   ): Promise<UserInteraction> {
+    await this.ensureInitialized();
+
     const now = Date.now();
     const interaction: UserInteraction = {
       id: this.generateInteractionId(userId, now),
@@ -53,6 +203,32 @@ export class InteractionRecorder {
       agentId,
       memoryIds,
     };
+
+    // Append to SQLite (ignore errors in memory-only fallback)
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(`
+          INSERT INTO user_interactions (
+            id, userId, timestamp, type, input, output, metadata,
+            sessionId, agentId, memoryIds, feedback, sentiment, tags
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, '[]')
+        `);
+        stmt.run(
+          interaction.id,
+          interaction.userId,
+          interaction.timestamp,
+          interaction.type,
+          interaction.input ?? null,
+          interaction.output ?? null,
+          JSON.stringify(interaction.metadata),
+          interaction.sessionId ?? null,
+          interaction.agentId ?? null,
+          JSON.stringify(interaction.memoryIds ?? [])
+        );
+      } catch (error) {
+        this.logger.error('Failed to persist interaction to SQLite', { error });
+      }
+    }
 
     // 保存到内存
     const userInteractions = this.interactions.get(userId) ?? [];
@@ -68,12 +244,15 @@ export class InteractionRecorder {
 
   /**
    * 添加反馈
+   * v3.0.0: 同时更新 SQLite
    */
   async addFeedback(
     interactionId: string,
     userId: string,
     feedback: InteractionFeedback
   ): Promise<void> {
+    await this.ensureInitialized();
+
     const interactions = this.getInteractions(userId, { limit: 1000 });
 
     const interaction = interactions.find(i => i.id === interactionId);
@@ -83,6 +262,19 @@ export class InteractionRecorder {
     }
 
     interaction.feedback = feedback;
+
+    // Persist to SQLite
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(`
+          UPDATE user_interactions SET feedback = ? WHERE id = ?
+        `);
+        stmt.run(JSON.stringify(feedback), interactionId);
+      } catch (error) {
+        this.logger.error('Failed to persist feedback to SQLite', { interactionId, error });
+      }
+    }
+
     this.logger.debug(`Added feedback to interaction ${interactionId} for user ${userId}`);
   }
 
@@ -98,11 +290,30 @@ export class InteractionRecorder {
 
   /**
    * 获取交互列表
+   * v3.0.0: 先查内存，内存不足时从 SQLite 分页加载
    */
   private getInteractions(userId: string, options?: HistoryOptions): UserInteraction[] {
-    const interactions = this.interactions.get(userId) ?? [];
+    const memoryInteractions = this.interactions.get(userId) ?? [];
+    const requestedLimit = options?.limit ?? MEMORY_LOAD_LIMIT;
 
-    let filtered = interactions;
+    let allInteractions: UserInteraction[];
+
+    // If memory is empty or has fewer than requested, supplement from SQLite
+    if (memoryInteractions.length < requestedLimit && this.db) {
+      const fromDb = this.loadFromSqlite(userId, requestedLimit, options);
+      // Merge: SQLite results (already timestamp DESC)
+      const seen = new Set(memoryInteractions.map(i => i.id));
+      for (const i of fromDb) {
+        if (!seen.has(i.id)) {
+          memoryInteractions.push(i);
+          seen.add(i.id);
+        }
+      }
+    }
+
+    allInteractions = memoryInteractions;
+
+    let filtered = allInteractions;
 
     // 按类型过滤
     if (options?.types && options.types.length > 0) {
@@ -121,11 +332,61 @@ export class InteractionRecorder {
     filtered = filtered.sort((a, b) => b.timestamp - a.timestamp);
 
     // 分页
+    if (options?.offset) {
+      filtered = filtered.slice(options.offset);
+    }
     if (options?.limit) {
       filtered = filtered.slice(0, options.limit);
     }
 
     return filtered;
+  }
+
+  /**
+   * 从 SQLite 分页加载交互记录
+   * v3.0.0
+   */
+  private loadFromSqlite(
+    userId: string,
+    limit: number,
+    options?: HistoryOptions
+  ): UserInteraction[] {
+    if (!this.db) return [];
+
+    try {
+      const conditions: string[] = ['userId = ?'];
+      const params: any[] = [userId];
+
+      if (options?.types && options.types.length > 0) {
+        const placeholders = options.types.map(() => '?').join(',');
+        conditions.push(`type IN (${placeholders})`);
+        params.push(...options.types);
+      }
+      if (options?.startDate) {
+        conditions.push('timestamp >= ?');
+        params.push(options.startDate);
+      }
+      if (options?.endDate) {
+        conditions.push('timestamp <= ?');
+        params.push(options.endDate);
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const sql = `
+        SELECT * FROM user_interactions
+        WHERE ${whereClause}
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `;
+
+      const stmt = this.db.prepare(sql);
+      const rows = stmt.all(...params, limit) as any[];
+
+      return rows.map(this.rowToInteraction);
+    } catch (error) {
+      this.logger.error('Failed to load interactions from SQLite', { userId, error });
+      return [];
+    }
   }
 
   /**

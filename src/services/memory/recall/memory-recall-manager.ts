@@ -31,6 +31,7 @@ import { config } from '../../../shared/config';
 import type { MemoryRecallConfig } from '../../../core/types/config';
 import { TransactionManager } from '../utils/transaction-manager';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
+import { prescreenByAAAK } from '../search/aaak-prescreen';
 
 // ============================================================
 // 类型定义
@@ -727,11 +728,43 @@ export class MemoryRecallManager {
       return { memories: [] };
     }
 
+    // ============================================================
+    // AAAK 预筛选：使用 AAAK 格式快速过滤和排序候选记忆
+    // 在向量搜索之前进行，可以减少向量搜索的候选数量
+    // ============================================================
+    let prescreenedCandidateUids: string[];
+    if (params.query && params.query.trim().length > 0) {
+      try {
+        // 使用 AAAK 预筛选对候选进行排序
+        prescreenedCandidateUids = await prescreenByAAAK(
+          params.query,
+          filteredCandidates.map(c => c.uid),
+          this.metaStore
+        );
+        this.logger.debug('AAAK prescreening applied', {
+          originalCount: filteredCandidates.length,
+          queryLength: params.query.length,
+        });
+      } catch (aaakError) {
+        // AAAK 预筛选失败时，回退到使用原始候选列表
+        this.logger.warn('AAAK prescreening failed, falling back to original candidates', {
+          error: String(aaakError),
+        });
+        prescreenedCandidateUids = filteredCandidates.map(c => c.uid);
+      }
+    } else {
+      // 无查询文本时，按重要性排序
+      prescreenedCandidateUids = filteredCandidates
+        .sort((a, b) => b.importanceScore - a.importanceScore)
+        .map(c => c.uid);
+    }
+
     // 3. 向量搜索（若无 queryVector，则直接将候选作为结果，按重要性返回）
     // Fallback: 当无 queryVector 时，使用 importanceScore / 10 作为相似度代理
     // importanceScore 范围通常是 0-10，除以 10 后得到 0-1 的相似度分数
     if (!params.queryVector || params.queryVector.length === 0) {
       const importanceBasedResults: VectorSearchResult[] = filteredCandidates
+        .sort((a, b) => b.importanceScore - a.importanceScore)
         .slice(0, params.limit)
         .map((c) => ({
           id: c.uid,
@@ -763,7 +796,7 @@ export class MemoryRecallManager {
       limit: params.limit,
       minScore: this.config.minSimilarity,
       filters: {
-        uids: filteredCandidates.map((c) => c.uid),
+        uids: prescreenedCandidateUids,
         agentId: params.agentId,
         scope: params.scope,
         type: params.type,

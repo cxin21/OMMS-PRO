@@ -320,6 +320,7 @@ export interface ISQLiteMetaStore {
 
   // 版本管理
   getVersionHistory(uid: string): Promise<VersionInfo[]>;
+  getVersionsByGroupId(versionGroupId: string): Promise<VersionInfo[]>;
   addVersion(uid: string, versionInfo: VersionInfo): Promise<void>;
   pruneVersions(uid: string, maxVersions: number): Promise<void>;
 

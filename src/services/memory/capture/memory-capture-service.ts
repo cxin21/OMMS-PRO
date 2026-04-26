@@ -28,6 +28,11 @@ import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logg
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
+import { compressToAAAK, encodeAAAK } from '../aaak';
+import {
+  IncrementalCaptureManager,
+  computeContentHash,
+} from './incremental-capture';
 
 /**
  * LLM Extractor 接口
@@ -60,6 +65,7 @@ export class MemoryCaptureService {
   private config: Required<MemoryCaptureConfig>;
   private inclusionDetector: MemoryInclusionDetector;
   private profileManager?: ProfileManager;
+  private incrementalCaptureManager: IncrementalCaptureManager;
 
   // 版本创建锁：防止并发创建导致同一版本组有多个最新版本
   // key: versionGroupId, value: 锁的 Promise
@@ -87,7 +93,8 @@ export class MemoryCaptureService {
       this.config = this.loadConfigFromManager();
     }
     this.logger = createServiceLogger('MemoryCaptureService');
-this.inclusionDetector = new MemoryInclusionDetector();
+    this.inclusionDetector = new MemoryInclusionDetector();
+    this.incrementalCaptureManager = new IncrementalCaptureManager();
 
     // 使用 wrapWithErrorBoundary 包装 capture 方法
     this.capture = wrapWithErrorBoundary(this.logger, 'MemoryCaptureService.capture', this.capture.bind(this)) as any;
@@ -152,7 +159,53 @@ this.inclusionDetector = new MemoryInclusionDetector();
       skipped: [],
     };
 
+    // ============================================================
+    // 增量摄取预检：在 LLM 提取前检查是否需要跳过
+    // ============================================================
+    const skipCheck = this.incrementalCaptureManager.checkShouldSkip(input);
+    if (skipCheck) {
+      this.logger.info('Incremental capture: skipping input', {
+        reason: skipCheck.reason,
+        sessionId: input.sessionId ?? 'default-session',
+        existingMemoryUid: skipCheck.existingMemoryUid,
+      });
+
+      if (skipCheck.existingMemoryUid) {
+        // 内容 hash 重复：直接复用已有记忆
+        result.skipped.push({
+          content: this.extractTextFromInput(input),
+          reason: 'duplicate',
+          details: `reused existing memory: ${skipCheck.existingMemoryUid}`,
+        });
+      } else {
+        // 光标跳过：无 timestamp 或 timestamp <= cursor
+        result.skipped.push({
+          content: this.extractTextFromInput(input),
+          reason: 'duplicate',
+          details: 'input timestamp <= cursor, already processed',
+        });
+      }
+
+      return result;
+    }
+
     const text = this.extractTextFromInput(input);
+
+    // 在 LLM 提取前先检查内容 hash 预检
+    const contentHash = computeContentHash(text);
+    const existingMemoryUid = this.incrementalCaptureManager.getContentHashCache().checkDuplicate(contentHash);
+    if (existingMemoryUid) {
+      this.logger.info('Content hash duplicate detected, skipping LLM extraction', {
+        contentHash: contentHash.substring(0, 16) + '...',
+        existingMemoryUid,
+      });
+      result.skipped.push({
+        content: text,
+        reason: 'duplicate',
+        details: `reused existing memory: ${existingMemoryUid}`,
+      });
+      return result;
+    }
 
     let enrichedMemories: Array<{
       item: ExtractedMemory;
@@ -319,6 +372,11 @@ this.inclusionDetector = new MemoryInclusionDetector();
       this.analyzeAndUpdateProfile(input, result.captured).catch((err) => {
         this.logger.warn('Auto profile analysis failed', { error: String(err) });
       });
+    }
+
+    // 6. 标记已处理（更新光标和内容 hash 缓存）
+    for (const captured of result.captured) {
+      this.incrementalCaptureManager.markProcessed(input, captured.metadata?.versionGroupId ?? '');
     }
 
     return result;
@@ -530,6 +588,31 @@ this.inclusionDetector = new MemoryInclusionDetector();
       this.logger.debug('Created new memory with complete conversation', {
         memoryId: memory.uid,
         originalContentLength: originalContent.length,
+      });
+    }
+
+    // ============================================================
+    // 生成 AAAK 压缩索引并存储到 metaStore
+    // AAAK 格式: aaak:ENTITY|TOPICS|"quote"|EMOTIONS|FLAGS
+    // ============================================================
+    try {
+      const aaakEntry = compressToAAAK(item.content, {
+        memoryType: item.type,
+      });
+      const aaakEncoded = encodeAAAK(aaakEntry);
+      const aaakTag = `aaak:${aaakEncoded}`;
+
+      await this.storeManager.addTags(versionGroupId, [aaakTag]);
+
+      this.logger.debug('AAAK index generated and stored', {
+        memoryId: versionGroupId,
+        aaakTag: aaakTag.substring(0, 80) + (aaakTag.length > 80 ? '...' : ''),
+      });
+    } catch (aaakError) {
+      // AAAK 生成失败不影响主流程，只记录日志
+      this.logger.warn('Failed to generate AAAK index', {
+        memoryId: versionGroupId,
+        error: String(aaakError),
       });
     }
 

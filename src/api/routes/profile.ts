@@ -26,7 +26,7 @@ export function createProfileRoutes(deps: ProfileRoutesDeps): Router {
       const profile = await deps.profileManager.getProfile(userId);
       const persona = await deps.profileManager.getPersona(userId);
       const preferences = await deps.profileManager.getPreferences(userId);
-      const stats = deps.profileManager.getUserStats(userId);
+      const stats = await deps.profileManager.getUserStats(userId);
 
       res.json({
         success: true,
@@ -365,7 +365,7 @@ export function createProfileRoutes(deps: ProfileRoutesDeps): Router {
   router.get('/:userId/stats', async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      const stats = deps.profileManager.getUserStats(userId);
+      const stats = await deps.profileManager.getUserStats(userId);
 
       res.json({
         success: true,

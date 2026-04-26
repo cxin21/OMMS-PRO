@@ -738,6 +738,28 @@ export class MemoryStoreManager {
   }
 
   /**
+   * 添加标签到记忆（不替换现有标签）
+   * @param memoryId 记忆 UID
+   * @param newTags 要添加的标签列表
+   */
+  async addTags(memoryId: string, newTags: string[]): Promise<void> {
+    const existingMeta = await this.metaStore.getById(memoryId);
+    if (!existingMeta) {
+      throw new Error(`Memory not found: ${memoryId}`);
+    }
+
+    // 合并现有标签和新标签，去重
+    const mergedTags = [...new Set([...existingMeta.tags, ...newTags])];
+
+    await this.metaStore.update(memoryId, {
+      tags: mergedTags,
+      updatedAt: Date.now(),
+    });
+
+    this.logger.debug('Tags added to memory', { memoryId, newTags, totalTags: mergedTags.length });
+  }
+
+  /**
    * 更新记忆
    */
   async update(

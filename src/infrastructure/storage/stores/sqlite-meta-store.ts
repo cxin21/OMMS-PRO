@@ -2,9 +2,9 @@
  * SQLite Meta Store - 基于 SQLite 的元数据索引存储
  * @module storage/sqlite-meta-store
  *
- * 版本: v2.1.0
+ * 版本: v2.2.0
  * - UID 作为主键
- * - 版本链管理
+ * - 版本链管理 (独立表 memory_versions)
  * - Palace 层级化存储
  */
 
@@ -20,6 +20,21 @@ import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
 import { config } from '../../../shared/config';
+
+/**
+ * Version record stored in the separate memory_versions table
+ */
+interface VersionRecord {
+  id: string;
+  uid: string;
+  versionGroupId: string;
+  version: number;
+  palaceRef: string;
+  summary: string;
+  contentLength: number;
+  createdAt: number;
+  isLatestVersion: boolean;
+}
 
 /**
  * SQLite Meta Store
@@ -126,6 +141,28 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
         // 列已存在，忽略
       }
 
+      // Create memory_versions table for efficient version queries (v2.2.0)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_versions (
+          id TEXT PRIMARY KEY,
+          uid TEXT NOT NULL,
+          versionGroupId TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          palaceRef TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          contentLength INTEGER NOT NULL,
+          createdAt INTEGER NOT NULL,
+          isLatestVersion INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+
+      // Create indexes for memory_versions
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_versions_uid ON memory_versions(uid);
+        CREATE INDEX IF NOT EXISTS idx_versions_versionGroupId ON memory_versions(versionGroupId);
+        CREATE INDEX IF NOT EXISTS idx_versions_createdAt ON memory_versions(createdAt);
+      `);
+
       // 迁移: 为旧数据库添加 topicId 列（如果不存在）
       try {
         this.db.exec(`ALTER TABLE memory_meta ADD COLUMN topicId TEXT`);
@@ -134,11 +171,46 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
         // 列已存在，忽略
       }
 
+      // 迁移: 检测 memory_versions 表是否存在，如不存在则创建
+      this.ensureMemoryVersionsTable();
+
       this.initialized = true;
       this.logger.info('SQLiteMetaStore initialized', { dbPath: this.config.dbPath });
     } catch (error) {
       this.logger.error('Failed to initialize SQLiteMetaStore', { error });
       throw error;
+    }
+  }
+
+  /**
+   * 确保 memory_versions 表存在（幂等迁移）
+   */
+  private ensureMemoryVersionsTable(): void {
+    try {
+      const result = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_versions'").get();
+      if (!result) {
+        this.db.exec(`
+          CREATE TABLE memory_versions (
+            id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            versionGroupId TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            palaceRef TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            contentLength INTEGER NOT NULL,
+            createdAt INTEGER NOT NULL,
+            isLatestVersion INTEGER NOT NULL DEFAULT 0
+          )
+        `);
+        this.db.exec(`
+          CREATE INDEX idx_versions_uid ON memory_versions(uid);
+          CREATE INDEX idx_versions_versionGroupId ON memory_versions(versionGroupId);
+          CREATE INDEX idx_versions_createdAt ON memory_versions(createdAt);
+        `);
+        this.logger.info('Created memory_versions table for version chain storage');
+      }
+    } catch (error) {
+      this.logger.warn('Failed to ensure memory_versions table', { error });
     }
   }
 
@@ -181,6 +253,11 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
         JSON.stringify(record.usedByAgents ?? [record.agentId]),
         record.currentPalaceRef
       );
+
+      // v2.2.0: 同时写入 memory_versions 表（第一个版本）
+      if (record.versionChain && record.versionChain.length > 0) {
+        this.insertVersionRecord(record.uid, record.versionGroupId, record.versionChain[0]);
+      }
 
       this.logger.debug('Meta record inserted', { uid: record.uid, versionGroupId: record.versionGroupId });
     } catch (error) {
@@ -229,6 +306,11 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
           JSON.stringify(record.usedByAgents ?? [record.agentId]),
           record.currentPalaceRef
         );
+
+        // v2.2.0: 同时写入 memory_versions 表（第一个版本）
+        if (record.versionChain && record.versionChain.length > 0) {
+          this.insertVersionRecord(record.uid, record.versionGroupId, record.versionChain[0]);
+        }
       }
     });
 
@@ -461,14 +543,96 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
   }
 
   /**
-   * 获取版本历史
+   * 获取版本历史 (v2.2.0 - 优先从 memory_versions 表查询)
    */
   async getVersionHistory(uid: string): Promise<VersionInfo[]> {
-    const record = await this.getById(uid);
-    if (!record) {
-      return [];
+    await this.ensureInitialized();
+
+    try {
+      // v2.2.0: 优先从 memory_versions 表查询（高效索引查询）
+      const stmt = this.db.prepare(`
+        SELECT version, palaceRef, summary, contentLength, createdAt
+        FROM memory_versions
+        WHERE uid = ?
+        ORDER BY createdAt ASC
+      `);
+      const rows = stmt.all(uid);
+
+      if (rows && rows.length > 0) {
+        return rows.map((row: any) => ({
+          version: row.version,
+          palaceRef: row.palaceRef,
+          summary: row.summary,
+          contentLength: row.contentLength,
+          createdAt: row.createdAt,
+        }));
+      }
+
+      // Fallback: 从 versionChain JSON 列读取（兼容旧数据）
+      const record = await this.getById(uid);
+      if (!record) {
+        return [];
+      }
+      return record.versionChain;
+    } catch (error) {
+      this.logger.warn('Failed to get version history from memory_versions, falling back to versionChain', { uid, error });
+      const record = await this.getById(uid);
+      return record?.versionChain ?? [];
     }
-    return record.versionChain;
+  }
+
+  /**
+   * 获取版本组的所有版本 (v2.2.0)
+   */
+  async getVersionsByGroupId(versionGroupId: string): Promise<VersionInfo[]> {
+    await this.ensureInitialized();
+
+    try {
+      const stmt = this.db.prepare(`
+        SELECT version, palaceRef, summary, contentLength, createdAt
+        FROM memory_versions
+        WHERE versionGroupId = ?
+        ORDER BY createdAt ASC
+      `);
+      const rows = stmt.all(versionGroupId);
+
+      return rows.map((row: any) => ({
+        version: row.version,
+        palaceRef: row.palaceRef,
+        summary: row.summary,
+        contentLength: row.contentLength,
+        createdAt: row.createdAt,
+      }));
+    } catch (error) {
+      this.logger.error('Failed to get versions by groupId', { versionGroupId, error });
+      throw error;
+    }
+  }
+
+  /**
+   * 插入版本记录到 memory_versions 表 (v2.2.0)
+   */
+  private insertVersionRecord(uid: string, versionGroupId: string, versionInfo: VersionInfo): void {
+    try {
+      const versionId = `version_record_${uid}_${versionInfo.version}`;
+      const stmt = this.db.prepare(`
+        INSERT INTO memory_versions (id, uid, versionGroupId, version, palaceRef, summary, contentLength, createdAt, isLatestVersion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+      `);
+      stmt.run(
+        versionId,
+        uid,
+        versionGroupId,
+        versionInfo.version,
+        versionInfo.palaceRef,
+        versionInfo.summary ?? '',
+        versionInfo.contentLength ?? 0,
+        versionInfo.createdAt
+      );
+      this.logger.debug('Version record inserted into memory_versions', { versionId, uid, version: versionInfo.version });
+    } catch (error) {
+      this.logger.warn('Failed to insert version record', { uid, version: versionInfo.version, error });
+    }
   }
 
   /**
@@ -501,6 +665,10 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
         Date.now(),
         uid
       );
+
+      // v2.2.0: 更新 memory_versions 表
+      this.db.prepare(`UPDATE memory_versions SET isLatestVersion = 0 WHERE uid = ? AND isLatestVersion = 1`).run(uid);
+      this.insertVersionRecord(uid, record.versionGroupId, versionInfo);
 
       this.logger.debug('Version added', { uid, version: versionInfo.version });
     } catch (error) {

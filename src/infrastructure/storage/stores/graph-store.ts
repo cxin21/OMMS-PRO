@@ -84,11 +84,20 @@ export class GraphStore implements IGraphStore {
       `);
 
       // Create indexes
+      // === MemPalace-inspired: entity type composite index and time-based index ===
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_entity ON graph_nodes(entity);
         CREATE INDEX IF NOT EXISTS idx_sourceId ON graph_edges(sourceId);
         CREATE INDEX IF NOT EXISTS idx_targetId ON graph_edges(targetId);
         CREATE INDEX IF NOT EXISTS idx_relation ON graph_edges(relation);
+        -- MemPalace source_closet equivalent: entity+type composite for type-filtered entity lookup
+        CREATE INDEX IF NOT EXISTS idx_node_entity_type ON graph_nodes(entity, type);
+        -- MemPalace valid_from/valid_to equivalent: time-range index for temporal queries
+        CREATE INDEX IF NOT EXISTS idx_node_createdAt ON graph_nodes(createdAt);
+        -- Temporal time-range index for edges (valid_from/valid_to equivalent)
+        CREATE INDEX IF NOT EXISTS idx_edge_temporal ON graph_edges(temporalStart, temporalEnd);
+        -- Relation weight composite index for weight-sorted relation queries
+        CREATE INDEX IF NOT EXISTS idx_edge_relation_weight ON graph_edges(relation, weight DESC);
       `);
 
       this.initialized = true;
@@ -257,6 +266,11 @@ export class GraphStore implements IGraphStore {
 
     const transaction = this.db.transaction(() => {
       // Find all nodes containing this memory - escape LIKE special characters
+      // NOTE: This LIKE '%uid%' query is a known performance bottleneck since memoryIds is a JSON array.
+      // SQLite cannot optimize JSON array containment with a standard index.
+      // Future optimization options:
+      //   a. Use SQLite JSON_TABLE function to extract array elements and build a separate index
+      //   b. Decompose memoryIds into a separate memory_node_links junction table
       const escapedMemoryId = this.escapeLikeValue(memoryId);
       const nodesStmt = this.db.prepare("SELECT id, memoryIds FROM graph_nodes WHERE memoryIds LIKE ?");
       const nodes = nodesStmt.all(`%${escapedMemoryId}%`);
@@ -294,6 +308,8 @@ export class GraphStore implements IGraphStore {
 
     try {
       // Find all entities this memory is connected to - escape LIKE special characters
+      // NOTE: This LIKE '%uid%' query is a known performance bottleneck since memoryIds is a JSON array.
+      // Future optimization: see options in removeMemory method.
       const escapedMemoryId = this.escapeLikeValue(memoryId);
       const nodesStmt = this.db.prepare("SELECT id, entity, memoryIds FROM graph_nodes WHERE memoryIds LIKE ?");
       const nodes = nodesStmt.all(`%${escapedMemoryId}%`) as any[];
@@ -804,11 +820,17 @@ export class GraphStore implements IGraphStore {
 
   /**
    * 获取统计
+   * NOTE: indexHitRate is an approximation based on query planner estimates.
+   * For production monitoring, use SQLite's query_log or EXPLAIN QUERY PLAN.
    */
   async getStats(): Promise<{
     nodeCount: number;
     edgeCount: number;
     entityCount: number;
+    indexInfo?: {
+      nodeIndexes: string[];
+      edgeIndexes: string[];
+    };
   }> {
     await this.ensureInitialized();
 
@@ -820,6 +842,10 @@ export class GraphStore implements IGraphStore {
     const edgeCount = edgeStmt.get().count;
     const entityCount = entityStmt.get().count;
 
-    return { nodeCount, edgeCount, entityCount };
+    // Index information for monitoring
+    const nodeIndexes = ['idx_entity', 'idx_node_entity_type', 'idx_node_createdAt'];
+    const edgeIndexes = ['idx_sourceId', 'idx_targetId', 'idx_relation', 'idx_edge_temporal', 'idx_edge_relation_weight'];
+
+    return { nodeCount, edgeCount, entityCount, indexInfo: { nodeIndexes, edgeIndexes } };
   }
 }

@@ -31,6 +31,53 @@ import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
 
 // ============================================================
+// AAAK Flag 保护配置
+// ============================================================
+
+/**
+ * AAAK Flag 保护系数
+ * 来自 MemPalace 设计原则：DECISION/ORIGIN/CORE/PIVOT/TECHNICAL 标记提升重要性
+ */
+const AAAK_FLAG_PROTECTION: Record<string, number> = {
+  DECISION: 0.5,
+  CORE: 0.3,
+  PIVOT: 0.4,
+  TECHNICAL: 0.2,
+};
+
+/** AAAK Flag 标签前缀 */
+const AAAK_FLAG_PREFIX = 'aaak:';
+
+/** AAAK Flag 最大叠加保护值 */
+const AAAK_MAX_PROTECTION = 1.0;
+
+/**
+ * 从 tags 中提取 AAAK flags
+ * @param tags 记忆标签数组
+ * @returns AAAK flag 保护系数总和（最大 1.0）
+ */
+function extractAAAKProtection(tags: string[] | undefined): number {
+  if (!tags || tags.length === 0) {
+    return 0;
+  }
+
+  let totalProtection = 0;
+
+  for (const tag of tags) {
+    if (tag.startsWith(AAAK_FLAG_PREFIX)) {
+      const flag = tag.substring(AAAK_FLAG_PREFIX.length);
+      const protection = AAAK_FLAG_PROTECTION[flag];
+      if (protection !== undefined) {
+        totalProtection += protection;
+      }
+    }
+  }
+
+  // 最大叠加 1.0
+  return Math.min(totalProtection, AAAK_MAX_PROTECTION);
+}
+
+// ============================================================
 // 类型定义
 // ============================================================
 
@@ -413,10 +460,11 @@ export class MemoryDegradationManager {
   /**
    * 评估记忆是否应该遗忘（双评分遗忘算法）
    *
-   * 遗忘分数 = effectiveImportance * importanceWeight + effectiveScope * scopeWeight
+   * 遗忘分数 = effectiveImportance * importanceWeight + effectiveScope * scopeWeight + aaakProtection
    * effectiveImportance = max(importance - daysSinceRecalled * decayRate * archivedDecayMultiplier, 0)
    * effectiveScope = max(scopeScore - daysSinceRecalled * decayRate * archivedDecayMultiplier, 0)
    * archivedDecayMultiplier = 2.0（归档记忆）或 1.0（普通记忆）
+   * aaakProtection = AAAK flags 提供的额外保护（最大 1.0）
    *
    * 注意：Profile 类型（IDENTITY/PREFERENCE/PERSONA）永不遗忘
    */
@@ -426,9 +474,13 @@ export class MemoryDegradationManager {
       return 'keep';
     }
 
+    // Step 0.5: 提取 AAAK 保护系数（仅对未归档记忆生效）
+    // 归档记忆按原规则遗忘，不受 AAAK 保护
+    const aaakProtection = this.isArchived(memory) ? 0 : extractAAAKProtection(memory.tags);
+
     // 已经在归档状态，只检查是否应该删除（不受保护等级约束）
     if (this.isArchived(memory)) {
-      const forgetScore = this.calculateForgetScore(memory);
+      const forgetScore = this.calculateForgetScore(memory, 0);
       if (forgetScore < this.config.deleteThreshold) {
         return 'delete';
       }
@@ -440,8 +492,8 @@ export class MemoryDegradationManager {
       return 'keep';
     }
 
-    // Step 2: 计算遗忘分数
-    const forgetScore = this.calculateForgetScore(memory);
+    // Step 2: 计算遗忘分数（包含 AAAK 保护）
+    const forgetScore = this.calculateForgetScore(memory, aaakProtection);
 
     // Step 3: 遗忘判定
     if (forgetScore < this.config.deleteThreshold) {
@@ -456,12 +508,16 @@ export class MemoryDegradationManager {
   /**
    * 计算遗忘分数（双评分遗忘算法）
    *
-   * forgetScore = effectiveImportance * importanceWeight + effectiveScope * scopeWeight
+   * forgetScore = effectiveImportance * importanceWeight + effectiveScope * scopeWeight + aaakProtection
    * effectiveImportance = max(importanceScore - days * decayRate * archivedDecayMultiplier, 0)
    * effectiveScope = max(scopeScore - days * decayRate * archivedDecayMultiplier, 0)
    * archivedDecayMultiplier = 2.0（归档记忆衰减翻倍）或 1.0（普通记忆）
+   * aaakProtection = AAAK flags 提供的额外保护（最大 1.0，来自 MemPalace 设计）
+   *
+   * @param memory 记忆元记录
+   * @param aaakProtection AAAK flag 保护系数（从 tags 中提取），默认为 0
    */
-  calculateForgetScore(memory: MemoryMetaRecord): number {
+  calculateForgetScore(memory: MemoryMetaRecord, aaakProtection: number = 0): number {
     const now = Date.now();
     const lastRecalled = memory.lastRecalledAt ?? memory.updatedAt;
     const daysSinceRecalled = (now - lastRecalled) / (1000 * 60 * 60 * 24);
@@ -482,7 +538,13 @@ export class MemoryDegradationManager {
       0
     );
 
-    const forgetScore = effectiveImportance * this.config.importanceWeight + effectiveScope * this.config.scopeWeight;
+    // AAAK 保护系数约束
+    const clampedAAAKProtection = Math.max(0, Math.min(aaakProtection, AAAK_MAX_PROTECTION));
+
+    const forgetScore =
+      effectiveImportance * this.config.importanceWeight +
+      effectiveScope * this.config.scopeWeight +
+      clampedAAAKProtection;
 
     return forgetScore;
   }

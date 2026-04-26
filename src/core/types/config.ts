@@ -547,6 +547,10 @@ export interface MemoryServiceConfig {
     profileDbPath?: string;
     /** Dream Reports 数据库路径 */
     dreamReportsDbPath?: string;
+    /** DynamicRoomManager 聚类数据库路径 */
+    roomClusterDbPath?: string;
+    /** MemoryRoomMapping 数据库路径 */
+    memoryRoomMappingDbPath?: string;
     /** Graph 处理器间隔（毫秒） */
     graphProcessorIntervalMs?: number;
   };
