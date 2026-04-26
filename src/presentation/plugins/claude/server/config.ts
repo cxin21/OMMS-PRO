@@ -21,9 +21,11 @@ export function getOmmsApiUrl(): string {
   // 尝试从配置读取
   if (config.isInitialized()) {
     try {
-      const apiConfig = config.getConfig('api') as { port?: number; enabled?: boolean } | undefined;
+      const apiConfig = config.getConfig('api') as { port?: number; enabled?: boolean; host?: string } | undefined;
       if (apiConfig?.enabled !== false && apiConfig?.port) {
-        return `http://localhost:${apiConfig.port}${DEFAULT_API_PATH}`;
+        // 使用配置的 host，默认 localhost
+        const host = apiConfig.host || 'localhost';
+        return `http://${host}:${apiConfig.port}${DEFAULT_API_PATH}`;
       }
     } catch {
       // 配置读取失败，继续使用备用方案
