@@ -310,7 +310,9 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
 
             // 对召回的记忆进行强化
             for (const m of result.memories.slice(0, 3)) {
-              await memoryService.reinforce(m.uid).catch(() => {});
+              await memoryService.reinforce(m.uid).catch((err) => {
+                logger.warn('memory_recall: reinforce failed', { uid: m.uid, error: err?.message });
+              });
             }
 
             return {
