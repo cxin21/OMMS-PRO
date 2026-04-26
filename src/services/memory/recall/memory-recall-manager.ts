@@ -213,22 +213,57 @@ export interface RecallStats {
 
 // ============================================================
 // 默认配置
+// 所有配置必须从 ConfigManager 读取，禁止硬编码
 // ============================================================
 
+/**
+ * 获取召回配置的默认值（延迟初始化）
+ * 仅在 ConfigManager 已初始化时调用
+ */
+function getDefaultRecallConfig(): RecallConfig | null {
+  if (!config.isInitialized()) {
+    return null;
+  }
+
+  try {
+    const recallConfig = config.getConfigOrThrow<MemoryRecallConfig>('memoryService.recall');
+    const reinforcementConfig = config.getConfigOrThrow<any>('memoryService.reinforcement');
+
+    return {
+      minMemories: 3,  // 非配置参数，保持默认值
+      maxMemories: 20,  // 非配置参数，保持默认值
+      minImportanceRatio: 0.6,  // 非配置参数，保持默认值
+      scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],  // 固定顺序
+      enableVectorSearch: recallConfig.enableVectorSearch ?? true,
+      enableKeywordSearch: recallConfig.enableKeywordSearch ?? true,
+      vectorWeight: recallConfig.vectorWeight ?? 0.7,
+      keywordWeight: recallConfig.keywordWeight ?? 0.3,
+      minSimilarity: recallConfig.minScore ?? 0.5,
+      includeVersionChain: true,  // 固定值
+      defaultLimit: recallConfig.defaultLimit ?? 20,
+      maxLimit: recallConfig.maxLimit ?? 100,
+      scopeBoost: reinforcementConfig?.scopeBoost ?? 0.6,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// 临时默认值，在构造函数中会被正确配置替换
 const DEFAULT_RECALL_CONFIG: RecallConfig = {
   minMemories: 3,
   maxMemories: 20,
   minImportanceRatio: 0.6,
   scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],
   enableVectorSearch: true,
-  enableKeywordSearch: true,  // 与 config.json memoryService.recall.enableKeywordSearch 一致
+  enableKeywordSearch: true,
   vectorWeight: 0.7,
   keywordWeight: 0.3,
   minSimilarity: 0.5,
   includeVersionChain: true,
   defaultLimit: 20,
   maxLimit: 100,
-  scopeBoost: 0.6,  // Fallback when config.memoryService.reinforcement.scopeBoost unavailable
+  scopeBoost: 0.6,
 };
 
 // ============================================================
@@ -314,6 +349,9 @@ export class MemoryRecallManager {
     // 使用 wrapWithErrorBoundary 包装 recall 方法
     this.recall = wrapWithErrorBoundary(this.logger, 'MemoryRecallManager.recall', this.recall.bind(this)) as any;
   }
+
+  // 缓存预热 Promise 追踪（防止并发重复预热）
+  private warmupPromises = new Map<string, Promise<void>>();
 
   /**
    * 执行递进式召回
@@ -458,10 +496,14 @@ export class MemoryRecallManager {
 
     // 强化记忆评分（异步，不阻塞返回）
     // 注意：使用 Promise.then 确保不会阻塞返回，但会记录日志
+    // 强化是"尽力而为"的，即使失败也不影响召回结果的正确性
     this.applyReinforcement(result.memories, currentAgentId)
       .catch(error => this.logger.warn('Reinforcement failed', { error: String(error) }));
 
     // 缓存预热：将召回结果写入 L1 Cache，减少下次召回延迟
+    // 注意：这是 fire-and-forget，在 return 之前启动但不会 await
+    // 这样下次召回同一记忆时可以命中缓存，但首次召回的本次延迟不会减少
+    // 当前 L1 Cache 使用 LRU 驱逐策略，热门记忆会保留在缓存中
     this.warmupCache(result.memories)
       .catch(error => this.logger.warn('Cache warmup failed', { error: String(error) }));
 
@@ -477,7 +519,7 @@ export class MemoryRecallManager {
 
   /**
    * 根据 UID 批量获取记忆
-   * 访问记忆时会更新 lastAccessedAt 和 accessCount
+   * 获取记忆时会更新 lastRecalledAt 和 recallCount（通过 updateRecallStats）
    */
   async getByIds(uids: string[]): Promise<RecallMemory[]> {
     if (uids.length === 0) {
@@ -496,9 +538,9 @@ export class MemoryRecallManager {
       return [];
     }
 
-    // 异步更新访问时间戳和访问次数（不阻塞返回）
-    this.updateAccessStats(uids, now).catch(error =>
-      this.logger.warn('Failed to update access stats', { error: String(error) })
+    // 异步更新召回时间戳和召回次数（不阻塞返回）
+    this.updateRecallStats(uids, now).catch(error =>
+      this.logger.warn('Failed to update recall stats', { error: String(error) })
     );
 
     // 构建 UID -> meta 映射
@@ -506,7 +548,9 @@ export class MemoryRecallManager {
 
     // 补全信息：若向量缺失，则用 meta 信息构造 placeholder
     // 注意：缺失向量的记忆使用 importanceScore / 10 作为相似度代理，而非 1.0
-    // 这样可以避免错误地将缺失向量记忆排在有向量的记忆之前
+    // 这是因为：1) 缺失向量说明可能是旧数据（维度修复前的数据）
+    //           2) 使用 importance 作为代理可以避免错误地将缺失向量记忆排在有向量的记忆之前
+    //           3) 重要性高的记忆更值得被召回，即使没有向量匹配
     const vectorMap = new Map(vectors.map((v) => [v.id, v]));
     const missingVectorCount = { value: 0 };
     const vectorResults: VectorSearchResult[] = metas.map((meta) => {
@@ -551,23 +595,32 @@ export class MemoryRecallManager {
   }
 
   /**
-   * 更新记忆的访问统计
-   * 包括 lastAccessedAt 和 accessCount（区别于 recall 的 lastRecalledAt 和 recallCount）
+   * 更新记忆的召回统计
+   * 包括 lastRecalledAt 和 recallCount
+   *
+   * 注意：lastAccessedAt 是一个派生字段，在构建 Memory 对象时从 lastRecalledAt 派生。
+   * 两者代表不同的语义：
+   * - lastRecalledAt: 最后语义召回时间（用于遗忘/降级计算）
+   * - lastAccessedAt: 最后访问时间（用于 UI 显示，实际上等于 lastRecalledAt）
+   *
+   * 为什么不分开维护？
+   * 因为"访问"和"召回"在当前实现中是等价的 - 每次访问记忆都是通过召回流程。
+   * 如果未来需要支持"访问但不计入召回"的场景，需要扩展 MemoryMetaRecord schema。
    */
-  private async updateAccessStats(uids: string[], now: number): Promise<void> {
+  private async updateRecallStats(uids: string[], now: number): Promise<void> {
     try {
       const metas = await this.metaStore.getByIds(uids);
       const updatePromises = metas.map(meta => {
-        const newAccessCount = (meta.recallCount || 0) + 1;
+        const newRecallCount = (meta.recallCount || 0) + 1;
         return this.metaStore.update(meta.uid, {
-          lastRecalledAt: now,  // 同时更新 lastRecalledAt，这样 lastAccessedAt 也会反映最新访问
-          recallCount: newAccessCount,
+          lastRecalledAt: now,
+          recallCount: newRecallCount,
         });
       });
       await Promise.all(updatePromises);
-      this.logger.debug('Updated access stats', { count: uids.length });
+      this.logger.debug('Updated recall stats', { count: uids.length });
     } catch (error) {
-      this.logger.warn('Failed to update access stats', { error: String(error) });
+      this.logger.warn('Failed to update recall stats', { error: String(error) });
     }
   }
 
@@ -634,12 +687,35 @@ export class MemoryRecallManager {
   /**
    * 缓存预热：将召回的记忆写入 L1 Cache
    * 这样下次召回同一记忆时可以命中缓存，减少延迟
+   * 使用 Promise 缓存确保相同记忆集合只执行一次预热
    */
   private async warmupCache(memories: RecallMemory[]): Promise<void> {
     if (memories.length === 0) {
       return;
     }
 
+    // 生成唯一 key（基于记忆 UID 排序）
+    const key = memories.map(m => m.uid).sort().join(',');
+
+    // 如果已有相同记忆集合的预热在进行中，等待其完成
+    if (this.warmupPromises.has(key)) {
+      this.logger.debug('Cache warmup already in progress, waiting', { count: memories.length, key });
+      return this.warmupPromises.get(key)!;
+    }
+
+    // 创建新的预热 Promise
+    const promise = this.doWarmup(memories).finally(() => {
+      this.warmupPromises.delete(key);
+    });
+    this.warmupPromises.set(key, promise);
+
+    return promise;
+  }
+
+  /**
+   * 执行实际的缓存预热
+   */
+  private async doWarmup(memories: RecallMemory[]): Promise<void> {
     try {
       // 构建 CacheEntry 格式的数据（包含 Memory 类型所需的所有字段）
       const cacheEntries = memories.map(memory => ({
@@ -761,15 +837,15 @@ export class MemoryRecallManager {
     }
 
     // 3. 向量搜索（若无 queryVector，则直接将候选作为结果，按重要性返回）
-    // Fallback: 当无 queryVector 时，使用 importanceScore / 10 作为相似度代理
-    // importanceScore 范围通常是 0-10，除以 10 后得到 0-1 的相似度分数
+    // 注意：当无 queryVector 时，这不是语义相似度搜索，而是按重要性排序
+    // score 字段此时表示的是重要性比例 (importanceScore / 10)，不是真正的相似度
     if (!params.queryVector || params.queryVector.length === 0) {
       const importanceBasedResults: VectorSearchResult[] = filteredCandidates
         .sort((a, b) => b.importanceScore - a.importanceScore)
         .slice(0, params.limit)
         .map((c) => ({
           id: c.uid,
-          score: c.importanceScore / 10,
+          score: c.importanceScore / 10, // 重要性比例，不是相似度
           metadata: {
             uid: c.uid,
             agentId: c.agentId,
@@ -1097,16 +1173,15 @@ export class MemoryRecallManager {
   }
 
   /**
-   * 强化记忆评分并触发作用域升级
+   * 强化记忆评分（仅更新分数，不触发作用域升级）
    *
    * 强化规则：
    * - importanceScore：每次召回 +0.3 ~ +0.5（根据当前值动态）
    * - scopeScore：被其他Agent召回时 +0.5
    * - recallCount：每次召回 +1
    *
-   * 升级规则（强化后自动触发）：
-   * - SESSION → AGENT: importance >= 5
-   * - AGENT → GLOBAL: scopeScore >= 6 且 importance >= 7
+   * 注意：作用域升级不在这里处理，统一通过 checkAndUpgradeScope() 或
+   * degradationManager 的作用域升级逻辑来处理，避免双重升级逻辑。
    *
    * 重要性强化幅度：
    * - 低重要性 (0-3): +0.5
@@ -1147,48 +1222,23 @@ export class MemoryRecallManager {
           ? existingAgents
           : [...existingAgents, currentAgentId];
 
-        // 检查是否应该升级（在更新评分后检查）
-        const upgradeResult = this.shouldUpgradeScope(memory.scope, newImportance, newScopeScore);
-
-        if (upgradeResult.shouldUpgrade) {
-          // 需要升级：触发升级（newScope 已在 applyReinforcement 中计算好）
-          const updateAndUpgradePromise = this.updateAndUpgradeScope(
-            memory.uid,
-            memory.scope,
-            upgradeResult.newScope!,
-            memory.agentId,
-            memory.sessionId,
-            newImportance,
-            newScopeScore,
-            newRecallCount,
-            now,
-            currentAgentId,
-            newUsedByAgents
-          ).catch((error) => {
-            this.logger.warn('Failed to apply reinforcement and upgrade', {
+        // 只更新评分，不触发作用域升级
+        // 作用域升级统一通过 checkAndUpgradeScope() 或 degradationManager 处理
+        const updatePromise = this.metaStore
+          .update(memory.uid, {
+            importanceScore: newImportance,
+            scopeScore: newScopeScore,
+            lastRecalledAt: now,
+            recallCount: newRecallCount,
+            usedByAgents: newUsedByAgents,
+          })
+          .catch((error) => {
+            this.logger.warn('Failed to apply reinforcement', {
               uid: memory.uid,
               error: String(error),
             });
           });
-          updatePromises.push(updateAndUpgradePromise);
-        } else {
-          // 不需要升级：只更新评分
-          const updatePromise = this.metaStore
-            .update(memory.uid, {
-              importanceScore: newImportance,
-              scopeScore: newScopeScore,
-              lastRecalledAt: now,
-              recallCount: newRecallCount,
-              usedByAgents: newUsedByAgents,
-            })
-            .catch((error) => {
-              this.logger.warn('Failed to apply reinforcement', {
-                uid: memory.uid,
-                error: String(error),
-              });
-            });
-          updatePromises.push(updatePromise);
-        }
+        updatePromises.push(updatePromise);
       }
 
       await Promise.all(updatePromises);
@@ -1204,12 +1254,15 @@ export class MemoryRecallManager {
   }
 
   /**
-   * 检查是否应该升级作用域
+   * 检查是否应该升级作用域（供外部调用）
    * 升级条件（使用配置）：
    * - SESSION → AGENT: importance >= sessionToAgentImportance
    * - AGENT → GLOBAL: scopeScore >= agentToGlobalScopeScore 且 importance >= agentToGlobalImportance
+   *
+   * 注意：此方法只返回是否应该升级，不执行实际升级操作。
+   * 实际升级统一通过 degradationManager.upgradeScope() 处理，避免双重升级逻辑。
    */
-  private shouldUpgradeScope(
+  shouldUpgradeScope(
     scope: MemoryScope,
     importance: number,
     scopeScore: number
@@ -1218,158 +1271,25 @@ export class MemoryRecallManager {
   }
 
   /**
-   * 更新评分并执行作用域升级
-   * 注意：只应在 shouldUpgradeScope 返回 true 后调用
-   * 使用事务管理器确保 L2/L3/L4 层操作的原子性
+   * @deprecated 已废弃。请使用 StorageMemoryService.checkAndUpgradeScope() 或
+   *             degradationManager.upgradeScope() 进行作用域升级。
+   *             此方法不再执行实际升级操作，仅保留用于向后兼容。
    */
   private async updateAndUpgradeScope(
-    uid: string,
-    currentScope: MemoryScope,
-    newScope: MemoryScope,
-    agentId: string,
-    sessionId: string | undefined,
-    newImportance: number,
-    newScopeScore: number,
-    newRecallCount: number,
-    now: number,
-    currentAgentId: string,
-    newUsedByAgents?: string[]
+    _uid: string,
+    _currentScope: MemoryScope,
+    _newScope: MemoryScope,
+    _agentId: string,
+    _sessionId: string | undefined,
+    _newImportance: number,
+    _newScopeScore: number,
+    _newRecallCount: number,
+    _now: number,
+    _currentAgentId: string,
+    _newUsedByAgents?: string[]
   ): Promise<void> {
-
-    // 计算新的 palace location
-    const wingId = this.calculateWingId(newScope, agentId, sessionId);
-
-    // 获取旧 palace ref 用于迁移
-    const oldRecord = await this.metaStore.getById(uid);
-    if (!oldRecord) {
-      return;
-    }
-
-    // 生成新的 palace ref
-    const newPalaceRef = PalaceStore.generatePalaceRef(
-      { wingId, hallId: oldRecord.palace.hallId, roomId: oldRecord.palace.roomId, closetId: oldRecord.palace.closetId },
-      uid,
-      oldRecord.version
-    );
-
-    // 使用事务管理器确保原子性
-    const txManager = new TransactionManager();
-    const tx = txManager.beginTransaction();
-    let migrationSucceeded = false;
-    const oldPalaceRef = oldRecord.currentPalaceRef;
-
-    try {
-      // 1. 迁移 palace 内容（带事务保护）
-      await this.palaceStore.move(oldPalaceRef, newPalaceRef);
-      migrationSucceeded = true;
-
-      // 2. 注册 metaStore 更新操作
-      txManager.registerOperation(tx.id, {
-        layer: 'meta',
-        operation: 'update',
-        targetId: uid,
-        commit: async () => {
-          await this.metaStore.update(uid, {
-            importanceScore: newImportance,
-            scopeScore: newScopeScore,
-            scope: newScope,
-            palace: {
-              wingId,
-              hallId: oldRecord.palace.hallId,
-              roomId: oldRecord.palace.roomId,
-              closetId: oldRecord.palace.closetId,
-            },
-            currentPalaceRef: newPalaceRef,
-            lastRecalledAt: now,
-            recallCount: newRecallCount,
-            ...(newUsedByAgents ? { usedByAgents: newUsedByAgents } : {}),
-          });
-        },
-        rollback: async () => {
-          // 回滚：恢复旧的 scope 和 palaceRef
-          await this.metaStore.update(uid, {
-            importanceScore: oldRecord.importanceScore,
-            scopeScore: oldRecord.scopeScore,
-            scope: currentScope,
-            palace: oldRecord.palace,
-            currentPalaceRef: oldPalaceRef,
-            lastRecalledAt: oldRecord.lastRecalledAt,
-            recallCount: oldRecord.recallCount,
-          });
-        },
-      });
-
-      // 3. 注册 vectorStore 元数据更新操作
-      txManager.registerOperation(tx.id, {
-        layer: 'vector',
-        operation: 'update',
-        targetId: uid,
-        commit: async () => {
-          await this.vectorStore.updateMetadata(uid, { palaceRef: newPalaceRef });
-        },
-        rollback: async () => {
-          // 回滚：恢复旧的 palaceRef
-          await this.vectorStore.updateMetadata(uid, { palaceRef: oldPalaceRef });
-        },
-      });
-
-      // 4. 注册缓存失效操作
-      txManager.registerOperation(tx.id, {
-        layer: 'cache',
-        operation: 'delete',
-        targetId: uid,
-        commit: async () => {
-          await this.cacheManager.delete(uid);
-        },
-        rollback: async () => {
-          // 缓存删除无回滚，只需重新预热即可
-          this.logger.debug('Cache invalidation rollback for scope upgrade', { uid });
-        },
-      });
-
-      // 5. 提交事务（执行 metaStore 和 vectorStore 更新）
-      await txManager.commit(tx.id);
-
-      this.logger.info('Memory scope upgraded during reinforcement', {
-        uid,
-        fromScope: currentScope,
-        toScope: newScope,
-        newImportance,
-        newScopeScore,
-      });
-    } catch (error) {
-      this.logger.error('Scope upgrade transaction failed, rolling back', {
-        uid,
-        oldPalaceRef,
-        newPalaceRef,
-        error: String(error),
-      });
-
-      // 回滚事务（会执行所有已注册操作的 rollback）
-      const rollbackResult = await txManager.rollback(tx.id);
-
-      // 如果 palace 迁移已成功但后续失败，需要手动回滚 palace
-      if (migrationSucceeded) {
-        try {
-          await this.palaceStore.move(newPalaceRef, oldPalaceRef);
-          this.logger.info('Palace migration rolled back successfully', { uid, oldPalaceRef, newPalaceRef });
-        } catch (rollbackError) {
-          this.logger.error('CRITICAL: Palace migration rollback failed - manual intervention required', {
-            uid,
-            oldPalaceRef,
-            newPalaceRef,
-            error: String(rollbackError),
-          });
-        }
-      }
-
-      if (!rollbackResult.success) {
-        this.logger.error('Transaction rollback had partial failures', {
-          uid,
-          failedOperations: rollbackResult.failedOperations,
-        });
-      }
-    }
+    // 此方法已废弃，作用域升级统一由 degradationManager 处理
+    this.logger.warn('updateAndUpgradeScope is deprecated, use degradationManager.upgradeScope instead');
   }
 
   /**

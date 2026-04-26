@@ -204,7 +204,10 @@ export class InteractionRecorder {
       memoryIds,
     };
 
-    // Append to SQLite (ignore errors in memory-only fallback)
+    // Append to SQLite
+    // 如果 SQLite 写入失败，交互仍然保存在内存中，但会记录错误
+    // 下次 cleanup 时可以恢复 SQLite 的数据一致性
+    let sqliteSuccess = false;
     if (this.db) {
       try {
         const stmt = this.db.prepare(`
@@ -225,12 +228,17 @@ export class InteractionRecorder {
           interaction.agentId ?? null,
           JSON.stringify(interaction.memoryIds ?? [])
         );
+        sqliteSuccess = true;
       } catch (error) {
-        this.logger.error('Failed to persist interaction to SQLite', { error });
+        this.logger.error('Failed to persist interaction to SQLite', {
+          error,
+          interactionId: interaction.id,
+          userId
+        });
       }
     }
 
-    // 保存到内存
+    // 保存到内存（即使 SQLite 失败也保存到内存，确保数据不丢失）
     const userInteractions = this.interactions.get(userId) ?? [];
     userInteractions.push(interaction);
     this.interactions.set(userId, userInteractions);

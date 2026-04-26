@@ -16,8 +16,8 @@ import type { MemoryStoreConfig } from '../../../core/types/config';
 
 /**
  * 获取作用域升级阈值
- * 必须从 memoryService.scopeDegradation 或 memoryService.store.scopeUpgradeThresholds 读取
- * 不允许硬编码默认值
+ * 统一从 memoryService.scopeDegradation 读取，所有模块必须使用此函数
+ * 以确保升级逻辑的一致性
  */
 export function getScopeUpgradeThresholds(): {
   sessionToAgentImportance: number;
@@ -25,37 +25,38 @@ export function getScopeUpgradeThresholds(): {
   agentToGlobalImportance: number;
 } {
   // 默认阈值（与 config.default.json 一致）
-  let result = {
+  const defaults = {
     sessionToAgentImportance: 5,
     agentToGlobalScopeScore: 10,
-    agentToGlobalImportance: 7,
+    agentToGlobalImportance: 10,
   };
 
   if (!config.isInitialized()) {
-    return result;
+    return defaults;
   }
 
-  // 优先从 scopeDegradation 读取（新版配置路径）
+  // 统一从 scopeDegradation 读取
   const scopeConfig = config.getConfig('memoryService.scopeDegradation') as any;
   if (scopeConfig) {
     return {
-      sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold ?? result.sessionToAgentImportance,
-      agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax ?? result.agentToGlobalScopeScore,
-      agentToGlobalImportance: scopeConfig.agentUpgradeRecallThreshold ?? result.agentToGlobalImportance,
+      sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold ?? defaults.sessionToAgentImportance,
+      agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax ?? defaults.agentToGlobalScopeScore,
+      agentToGlobalImportance: scopeConfig.agentUpgradeRecallThreshold ?? defaults.agentToGlobalImportance,
     };
   }
 
-  // 回退到 store.scopeUpgradeThresholds（旧版配置）
+  // 兼容旧版配置：如果 scopeDegradation 不存在，尝试从 store.scopeUpgradeThresholds 读取
   const storeConfig = config.getConfig('memoryService.store') as Partial<MemoryStoreConfig> | undefined;
   if (storeConfig?.scopeUpgradeThresholds) {
+    const storeThresholds = storeConfig.scopeUpgradeThresholds;
     return {
-      sessionToAgentImportance: storeConfig.scopeUpgradeThresholds.sessionToAgentImportance ?? result.sessionToAgentImportance,
-      agentToGlobalScopeScore: storeConfig.scopeUpgradeThresholds.agentToGlobalScopeScore ?? result.agentToGlobalScopeScore,
-      agentToGlobalImportance: storeConfig.scopeUpgradeThresholds.agentToGlobalImportance ?? result.agentToGlobalImportance,
+      sessionToAgentImportance: storeThresholds.sessionToAgentImportance ?? defaults.sessionToAgentImportance,
+      agentToGlobalScopeScore: storeThresholds.agentToGlobalScopeScore ?? defaults.agentToGlobalScopeScore,
+      agentToGlobalImportance: storeThresholds.agentToGlobalImportance ?? defaults.agentToGlobalImportance,
     };
   }
 
-  return result;
+  return defaults;
 }
 
 /**

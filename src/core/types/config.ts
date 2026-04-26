@@ -677,7 +677,11 @@ export interface MemoryDegradationConfig {
   enabled: boolean;
   /** 降级检查间隔（毫秒） */
   checkInterval: number;
-  /** 每日衰减率 */
+  /**
+   * 衰减率：每天衰减量
+   * 例如: 0.01 表示每天 importance 和 scopeScore 减少 0.01
+   * 有效值 = max(原始值 - 天数 * decayRate * archivedDecayMultiplier, 0)
+   */
   decayRate: number;
   /** 重要性权重 */
   importanceWeight: number;
@@ -689,6 +693,8 @@ export interface MemoryDegradationConfig {
   archiveThreshold: number;
   /** 保护等级 */
   protectLevel: number;
+  /** 归档衰减乘数：归档记忆衰减加速系数 */
+  archivedDecayMultiplier?: number;
 }
 
 export interface ScopeDegradationConfig {

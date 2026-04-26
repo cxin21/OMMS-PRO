@@ -340,9 +340,9 @@ export class PersonaBuilder {
   private formatConversation(turns: ConversationTurn[]): string {
     return turns
       .map((turn, index) => {
-        const userMsg = turn.userMessage;
-        const assistantMsg = turn.assistantResponse ? `\nAssistant: ${turn.assistantResponse}` : '';
-        return `[Turn ${index + 1}]\nUser: ${userMsg}${assistantMsg}`;
+        const { user, assistant } = normalizeTurn(turn);
+        const assistantMsg = assistant ? `\nAssistant: ${assistant}` : '';
+        return `[Turn ${index + 1}]\nUser: ${user}${assistantMsg}`;
       })
       .join('\n\n');
   }
@@ -594,11 +594,36 @@ export class PersonaBuilder {
 }
 
 /**
- * 对话轮次接口（从外部导入）
+ * 对话轮次接口
+ * 支持两种格式：
+ * - role/content 格式 (来自 memory/core/types/memory.ts)
+ * - userMessage/assistantResponse 格式 (legacy format)
  */
 export interface ConversationTurn {
-  userMessage: string;
+  // role/content 格式
+  role?: 'user' | 'assistant';
+  content?: string;
+  // userMessage/assistantResponse 格式
+  userMessage?: string;
   assistantResponse?: string;
+  // 通用字段
   timestamp?: number;
   metadata?: Record<string, any>;
+}
+
+/**
+ * 规范化对话轮次，确保有 userMessage 和 assistantResponse
+ */
+function normalizeTurn(turn: ConversationTurn): { user: string; assistant: string } {
+  // 处理 role/content 格式
+  if (turn.role === 'user') {
+    return { user: turn.content || turn.userMessage || '', assistant: turn.assistantResponse || '' };
+  }
+  if (turn.role === 'assistant') {
+    // assistant 的 role 表示这是 assistant 的回复
+    // 需要找到对应的 user 消息（通常在上一轮）
+    return { user: turn.userMessage || '', assistant: turn.content || turn.assistantResponse || '' };
+  }
+  // 兼容 userMessage/assistantResponse 格式
+  return { user: turn.userMessage || '', assistant: turn.assistantResponse || '' };
 }

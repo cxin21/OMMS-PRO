@@ -98,11 +98,15 @@ export class Logger implements ILogger {
     // 文件传输
     if (this.config.enableFile || this.config.output === 'file' || this.config.output === 'both') {
       if (this.config.filePath) {
+        // 支持 maxSize (number) 和 maxFileSize (string) 两种配置
+        // maxSize 来自 config.default.json (如 10485760)
+        // maxFileSize 来自 LoggingConfig (如 "50MB")
+        const maxSize = this.config.maxSize ?? this.config.maxFileSize;
         transports.push(
           new FileTransport({
             filePath: this.config.filePath,
-            maxSize: this.config.maxFileSize,
-            maxFiles: this.config.maxFiles,
+            maxSize: maxSize,
+            maxFiles: this.config.maxFiles ?? this.config.rotationCount,
             enableRotation: this.config.enableRotation,
             formatter: this.formatter,
           }),

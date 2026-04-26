@@ -23,11 +23,20 @@ import { MemoryBlock, MemoryType, isProfileType } from '../../../core/types/memo
 import { config } from '../../../shared/config';
 
 /**
+ * 内部使用的归档配置类型，包含权重配置
+ */
+interface InternalArchivalConfig extends ArchivalConfig {
+  importanceWeight: number;
+  stalenessWeight: number;
+  recallWeight: number;
+}
+
+/**
  * StorageOptimizer - 存储优化器
  */
 export class StorageOptimizer {
   private readonly logger: ILogger;
-  private archivalConfig: Required<ArchivalConfig>;
+  private archivalConfig: InternalArchivalConfig;
   private defragConfig: Required<DefragmentationConfig>;
   private lastDefragmentationAt?: number;
 
@@ -48,6 +57,10 @@ export class StorageOptimizer {
       archiveBlock: archivalConfig?.archiveBlock ?? MemoryBlock.ARCHIVED,
       retentionDays: archivalConfig?.retentionDays ?? 90,
       archiveScoreThreshold: archivalConfig?.archiveScoreThreshold ?? 50,
+      // 从配置读取评分权重，否则使用默认值
+      importanceWeight: archivalConfig?.archiveScoreWeights?.importanceWeight ?? 40,
+      stalenessWeight: archivalConfig?.archiveScoreWeights?.stalenessWeight ?? 35,
+      recallWeight: archivalConfig?.archiveScoreWeights?.recallWeight ?? 25,
     };
 
     // 默认碎片整理配置
@@ -654,26 +667,23 @@ export class StorageOptimizer {
     // 计算综合归档分数 (0-100, 越高越应该归档)
     let archiveScore = 0;
 
-    // 因素1: 重要性评分 (权重 40)
-    // importance 越低得分越高
+    // 因素1: 重要性评分 - importance 越低得分越高
     const importanceFactor = Math.max(0, 10 - memory.importanceScore) / 10;
-    archiveScore += importanceFactor * 40;
+    archiveScore += importanceFactor * this.archivalConfig.importanceWeight;
 
-    // 因素2: 陈旧度评分 (权重 35)
-    // 超过 stalenessDays 的记忆得分越高
+    // 因素2: 陈旧度评分 - 超过 stalenessDays 的记忆得分越高
     if (memory.lastRecalledAt) {
       const daysSinceAccess = (Date.now() - memory.lastRecalledAt) / (24 * 60 * 60 * 1000);
       const stalenessFactor = Math.min(daysSinceAccess / (this.archivalConfig.stalenessDays * 2), 1);
-      archiveScore += stalenessFactor * 35;
+      archiveScore += stalenessFactor * this.archivalConfig.stalenessWeight;
     } else {
       // 从未访问过的记忆，给予中等分数
-      archiveScore += 15;
+      archiveScore += this.archivalConfig.stalenessWeight * 0.43; // 约等于原来的 15
     }
 
-    // 因素3: 召回频率评分 (权重 25)
-    // recallCount 越低得分越高
+    // 因素3: 召回频率评分 - recallCount 越低得分越高
     const recallFactor = Math.max(0, 10 - memory.recallCount) / 10;
-    archiveScore += recallFactor * 25;
+    archiveScore += recallFactor * this.archivalConfig.recallWeight;
 
     // 综合评分阈值：超过阈值则归档（可配置）
     const archiveThreshold = this.archivalConfig.archiveScoreThreshold;

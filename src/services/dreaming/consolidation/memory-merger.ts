@@ -40,6 +40,8 @@ export class MemoryMerger {
   private readonly logger: ILogger;
   private config: Required<ConsolidationConfig>;
   private inclusionDetector?: MemoryInclusionDetector;
+  // 缓存向量维度，避免重复获取
+  private cachedDimensions?: number;
 
   constructor(
     private memoryService: StorageMemoryService,
@@ -54,6 +56,7 @@ export class MemoryMerger {
     this.config = {
       similarityThreshold: config?.similarityThreshold ?? 0.85,
       maxGroupSize: config?.maxGroupSize ?? 5,
+      maxTagsPerMemory: config?.maxTagsPerMemory ?? 10,
       preserveNewest: config?.preserveNewest ?? true,
       createNewVersion: config?.createNewVersion ?? true,
       topicSimilarityThreshold: config?.topicSimilarityThreshold ?? 0.5,
@@ -78,6 +81,41 @@ export class MemoryMerger {
       vectorSearchLimit: this.config.vectorSearchLimit,
       candidateThreshold: this.config.candidateThreshold,
     };
+  }
+
+  /**
+   * 获取向量维度
+   * 优先从 vectorStore 获取，否则从配置读取
+   * 缓存结果避免重复查询
+   */
+  private getEmbeddingDimensions(): number {
+    if (this.cachedDimensions !== undefined) {
+      return this.cachedDimensions;
+    }
+
+    // 1. 从 vectorStore 获取（如果支持）
+    if (this.vectorStore.dimensions) {
+      this.cachedDimensions = this.vectorStore.dimensions;
+      return this.cachedDimensions;
+    }
+
+    // 2. 从 ConfigManager 获取（embedding.dimensions）
+    try {
+      const { config } = require('../../../shared/config');
+      if (config.isInitialized()) {
+        const embeddingConfig = config.getConfig('embedding') as { dimensions?: number } | undefined;
+        if (embeddingConfig?.dimensions) {
+          this.cachedDimensions = embeddingConfig.dimensions;
+          return this.cachedDimensions;
+        }
+      }
+    } catch {
+      // ConfigManager 不可用，忽略
+    }
+
+    // 3. 默认值（仅作为最后兜底）
+    this.cachedDimensions = 1536;
+    return this.cachedDimensions;
   }
 
   /**
@@ -141,11 +179,13 @@ export class MemoryMerger {
     });
 
     // 批量获取向量用于计算相似度
+    // 如果向量不存在，使用零向量填充（维度从配置读取，不硬编码）
+    const dimensions = this.getEmbeddingDimensions();
     const vectors: number[][] = [];
     for (let i = 0; i < n; i++) {
       const id = nonProfileCandidates[i];
       const vec = candidateVectors.get(id);
-      vectors.push(vec || new Array(1024).fill(0));
+      vectors.push(vec || new Array(dimensions).fill(0));
     }
 
     // 计算相似度矩阵并构建 Union-Find 分组
@@ -404,6 +444,20 @@ export class MemoryMerger {
     }
 
     // 综合评分策略
+    // 首先计算组内时间范围，用于归一化创建时间
+    let minCreatedAt = Infinity;
+    let maxCreatedAt = -Infinity;
+    for (const id of memoryIds) {
+      const meta = metas.get(id);
+      if (!meta) continue;
+      const createdAt = meta.createdAt ?? 0;
+      if (createdAt > 0) {
+        minCreatedAt = Math.min(minCreatedAt, createdAt);
+        maxCreatedAt = Math.max(maxCreatedAt, createdAt);
+      }
+    }
+    const timeRange = maxCreatedAt - minCreatedAt;
+
     let bestId = memoryIds[0];
     let bestScore = 0;
 
@@ -418,8 +472,13 @@ export class MemoryMerger {
 
       // 归一化访问频率（假设最大访问次数为 100）
       const normalizedRecall = Math.min(recallCount / 100, 1);
-      // 归一化创建时间（假设时间戳范围在合理范围内）
-      const normalizedTime = createdAt > 0 ? 1 : 0;
+
+      // 归一化创建时间：将时间戳归一化到 [0, 1] 范围
+      // 如果 timeRange > 0，说明组内有时间差异，用 (createdAt - min) / range 归一化
+      // 如果 timeRange === 0，说明所有记忆创建时间相同，使用默认值 0.5
+      const normalizedTime = timeRange > 0 && createdAt > 0
+        ? (createdAt - minCreatedAt) / timeRange
+        : (createdAt > 0 ? 0.5 : 0);
 
       const score = importanceScore * 0.5 + normalizedRecall * 0.3 + normalizedTime * 0.2;
 

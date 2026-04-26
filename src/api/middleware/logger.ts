@@ -11,6 +11,7 @@
 import { Request, Response, NextFunction } from 'express';
 import type { ILogger } from '../../shared/logging';
 import { IDGenerator } from '../../shared/utils/id-generator';
+import { sanitizeData } from '../../shared/logging/sanitizer';
 
 /**
  * 创建日志中间件
@@ -104,13 +105,15 @@ export function createLoggerMiddleware(logger: ILogger) {
 
       // 记录错误响应详情
       if (responseBody && statusCode >= 400) {
+        // 对整个响应体进行敏感数据脱敏
+        const sanitizedBody = sanitizeData(responseBody as Record<string, unknown>);
         logger.warn(`[${requestId}] Error response`, {
           type: 'error_response',
           requestId,
           method,
           path,
           statusCode,
-          error: responseBody.error || responseBody.message || responseBody,
+          error: sanitizedBody['error'] || sanitizedBody['message'] || sanitizedBody,
           duration,
         });
       }

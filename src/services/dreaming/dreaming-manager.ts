@@ -144,18 +144,24 @@ export class DreamingManager {
   ) {
     this.logger = createServiceLogger('DreamingManager');
 
-    // 合并配置：如果传入了配置则使用，否则从 ConfigManager 或 ConfigLoader 获取
+    // 合并配置：优先级 ConfigManager > userConfig > defaults
+    const defaults = new ConfigLoader().loadDefaults();
+    const defaultConfig = ObjectUtils.deepClone(defaults.dreamingEngine) as any;
+
     if (userConfig && Object.keys(userConfig).length > 0) {
-      const defaults = new ConfigLoader().loadDefaults();
-      this.config = ObjectUtils.deepClone(defaults.dreamingEngine) as any;
-      this.config = { ...this.config, ...userConfig };
+      // userConfig 提供的部分覆盖 defaults
+      this.config = { ...defaultConfig, ...userConfig };
     } else {
+      // 优先从 ConfigManager 读取配置，否则使用 defaults
       try {
-        this.config = config.getConfig('dreamingEngine');
+        if (config.isInitialized()) {
+          this.config = ObjectUtils.deepClone(config.getConfig('dreamingEngine')) as any;
+        } else {
+          this.config = defaultConfig;
+        }
       } catch {
         // ConfigManager 未初始化，使用默认配置
-        const defaults = new ConfigLoader().loadDefaults();
-        this.config = ObjectUtils.deepClone(defaults.dreamingEngine) as any;
+        this.config = defaultConfig;
       }
     }
 
@@ -883,13 +889,15 @@ export class DreamingManager {
 
   /**
    * 合并标签（去重 + 保留原始）
+   * 使用配置的最大标签数限制，默认为 10
    */
   private mergeTags(originalTags: string[], newTags: string[]): string[] {
+    const maxTags = this.config.consolidation?.maxTagsPerMemory ?? 10;
     const tagSet = new Set<string>(originalTags);
     for (const tag of newTags) {
       tagSet.add(tag);
     }
-    return Array.from(tagSet).slice(0, 10); // 最多10个标签
+    return Array.from(tagSet).slice(0, maxTags);
   }
 
   // ============================================================
@@ -902,48 +910,36 @@ export class DreamingManager {
    * 扫描所有记忆，计算碎片化指标，决定是否需要整理
    */
   private async phase1Scan(): Promise<ScanResult> {
-    // [dream:868] phase1Scan method entry
     const startTime = Date.now();
-    // [dream:869] startTime initialized
 
-    this.logger.debug('[dream:871] Phase 1: SCAN starting');
-    // [dream:871] SCAN start log written
+    this.logger.debug('Phase 1: SCAN starting');
 
     // 1. Calculate fragmentation metrics
-    // [dream:873] Calling storageOptimizer.calculateFragmentation()
     const metrics = await this.storageOptimizer.calculateFragmentation();
-    // [dream:873] calculateFragmentation returned
-    this.logger.debug('[dream:874] Fragmentation metrics calculated', {
+    this.logger.debug('Fragmentation metrics calculated', {
       palaceFragmentation: metrics.palaceFragmentation,
       graphEdgeDensity: metrics.graphEdgeDensity,
       orphanedMemories: metrics.orphanedMemories,
       staleMemories: metrics.staleMemories,
     });
-    // [dream:874] Metrics logged
 
     // 2. Get candidate memories to process
-    // [dream:876] Calling findCandidates()
     const candidates = await this.findCandidates();
-    // [dream:877] findCandidates returned
-    this.logger.debug('[dream:878] Candidates found', { count: candidates.length });
-    // [dream:878] Candidate count logged
+    this.logger.debug('Candidates found', { count: candidates.length });
 
     const result: ScanResult = {
       metrics,
       scannedCount: candidates.length,
       candidates,
     };
-    // [dream:883] ScanResult object created
 
-    this.logger.debug('[dream:885] Phase 1: SCAN completed', {
+    this.logger.debug('Phase 1: SCAN completed', {
       scannedCount: result.scannedCount,
       candidateCount: result.candidates.length,
       duration: Date.now() - startTime,
     });
-    // [dream:889] SCAN completion log written
 
     return result;
-    // [dream:891] Returning ScanResult
   }
 
   /**
@@ -980,12 +976,9 @@ export class DreamingManager {
     candidates: string[],
     input?: OrganizationInput
   ): Promise<AnalyzeResult> {
-    // [dream:928] phase2Analyze method entry
     const startTime = Date.now();
-    // [dream:929] startTime initialized
 
-    this.logger.debug('[dream:931] Phase 2: ANALYZE starting', { candidateCount: candidates.length });
-    // [dream:931] ANALYZE start log written
+    this.logger.debug('Phase 2: ANALYZE starting', { candidateCount: candidates.length });
 
     const result: AnalyzeResult = {
       similarGroups: [],
@@ -994,108 +987,74 @@ export class DreamingManager {
       orphanedNodes: [],
       foundIssues: 0,
     };
-    // [dream:938] AnalyzeResult object initialized
 
     // Determine organization type based on input
-    // [dream:941] Determining organization type
     const orgType = input?.type ?? OrganizationType.ALL;
-    // [dream:942] orgType set
-    this.logger.debug('[dream:943] Organization type determined', { orgType });
-    // [dream:943] orgType logged
+    this.logger.debug('Organization type determined', { orgType });
 
     // Execute analysis in parallel
-    // [dream:945] Setting up parallel analysis tasks
     const analysisPromises: Promise<void>[] = [];
-    // [dream:946] analysisPromises array initialized
 
     // 1. Memory consolidation analysis
-    // [dream:947] Checking if CONSOLIDATION or ALL analysis is needed
     if (orgType === OrganizationType.CONSOLIDATION || orgType === OrganizationType.ALL) {
-      // [dream:948] Adding consolidation analysis task
-      this.logger.debug('[dream:949] Adding consolidation analysis task');
+      this.logger.debug('Adding consolidation analysis task');
       analysisPromises.push(
         this.memoryMerger.findSimilarGroups(candidates).then(groups => {
-          // [dream:951] findSimilarGroups completed
-          this.logger.debug('[dream:952] Similar groups found', { count: groups.length });
+          this.logger.debug('Similar groups found', { count: groups.length });
           result.similarGroups = groups;
-          // [dream:954] similarGroups assigned to result
         })
       );
-      // [dream:955] Consolidation task added
     }
-    // [dream:956] Consolidation check complete
 
     // 2. Graph reorganization analysis (has dependency, execute serially)
-    // [dream:957] Checking if REORGANIZATION or ALL analysis is needed
     if (orgType === OrganizationType.REORGANIZATION || orgType === OrganizationType.ALL) {
-      // [dream:958] Adding reorganization analysis task
-      this.logger.debug('[dream:959] Adding reorganization analysis task');
+      this.logger.debug('Adding reorganization analysis task');
       analysisPromises.push(
         (async () => {
-          // [dream:961] Finding orphaned nodes
-          this.logger.debug('[dream:962] Finding orphaned nodes');
+          this.logger.debug('Finding orphaned nodes');
           const orphaned = await this.graphReorganizer.findOrphanedNodes();
-          // [dream:963] findOrphanedNodes returned
-          this.logger.debug('[dream:964] Orphaned nodes found', { count: orphaned.length });
+          this.logger.debug('Orphaned nodes found', { count: orphaned.length });
           result.orphanedNodes = orphaned.map(o => o.nodeId);
-          // [dream:966] orphanedNodes mapped and assigned
 
-          // [dream:967] Analyzing gaps
-          this.logger.debug('[dream:968] Analyzing gaps in graph');
+          this.logger.debug('Analyzing gaps in graph');
           result.brokenRelations = await this.graphReorganizer.analyzeGaps();
-          // [dream:969] analyzeGaps returned
-          this.logger.debug('[dream:970] Broken relations found', { count: result.brokenRelations.length });
-          // [dream:970] brokenRelations assigned
+          this.logger.debug('Broken relations found', { count: result.brokenRelations.length });
         })()
       );
-      // [dream:972] Reorganization task added
     }
-    // [dream:973] Reorganization check complete
 
     // 3. Archival cleanup analysis
-    // [dream:974] Checking if ARCHIVAL or ALL analysis is needed
     if (orgType === OrganizationType.ARCHIVAL || orgType === OrganizationType.ALL) {
-      // [dream:975] Adding archival analysis task
-      this.logger.debug('[dream:976] Adding archival analysis task');
+      this.logger.debug('Adding archival analysis task');
       const limit = input?.limit ?? this.config.scheduler.maxMemoriesPerCycle;
-      // [dream:977] limit calculated
       analysisPromises.push(
         this.storageOptimizer.findArchivalCandidates(limit).then(candidates => {
-          // [dream:980] findArchivalCandidates completed
-          this.logger.debug('[dream:981] Archival candidates found', { count: candidates.length });
+          this.logger.debug('Archival candidates found', { count: candidates.length });
           result.archivalCandidates = candidates;
-          // [dream:983] archivalCandidates assigned to result
         })
       );
-      // [dream:984] Archival task added
     }
-    // [dream:985] Archival check complete
 
     // Wait for all analysis to complete
-    // [dream:978] Waiting for all analysis promises
-    this.logger.debug('[dream:979] Waiting for all analysis tasks to complete');
+    this.logger.debug('Waiting for all analysis tasks to complete');
     await Promise.all(analysisPromises);
-    // [dream:989] All analysis promises resolved
-    this.logger.debug('[dream:990] All analysis tasks completed');
+    this.logger.debug('All analysis tasks completed');
 
     // Calculate total issues found
-    // [dream:991] Calculating total foundIssues
     result.foundIssues =
       result.similarGroups.length +
       result.brokenRelations.length +
       result.archivalCandidates.length +
       result.orphanedNodes.length;
-    // [dream:997] foundIssues calculated
-    this.logger.debug('[dream:998] Total issues calculated', {
+    this.logger.debug('Total issues calculated', {
       similarGroups: result.similarGroups.length,
       brokenRelations: result.brokenRelations.length,
       archivalCandidates: result.archivalCandidates.length,
       orphanedNodes: result.orphanedNodes.length,
       totalFoundIssues: result.foundIssues,
     });
-    // [dream:998] Issues logged
 
-    this.logger.debug('[dream:1005] Phase 2: ANALYZE completed', {
+    this.logger.debug('Phase 2: ANALYZE completed', {
       similarGroups: result.similarGroups.length,
       brokenRelations: result.brokenRelations.length,
       archivalCandidates: result.archivalCandidates.length,
@@ -1103,10 +1062,8 @@ export class DreamingManager {
       foundIssues: result.foundIssues,
       duration: Date.now() - startTime,
     });
-    // [dream:1006] ANALYZE completion log written
 
     return result;
-    // [dream:1008] Returning AnalyzeResult
   }
 
   // ============================================================
@@ -1123,12 +1080,9 @@ export class DreamingManager {
     analyzeResult: AnalyzeResult,
     input?: OrganizationInput
   ): Promise<ExecuteResult> {
-    // [dream:1024] phase3Execute method entry
     const startTime = Date.now();
-    // [dream:1025] startTime initialized
 
-    this.logger.debug('[dream:1027] Phase 3: EXECUTE starting');
-    // [dream:1027] EXECUTE start log written
+    this.logger.debug('Phase 3: EXECUTE starting');
 
     const result: ExecuteResult = {
       memoriesMerged: 0,
@@ -1137,140 +1091,105 @@ export class DreamingManager {
       relationsRebuilt: 0,
       storageFreed: 0,
     };
-    // [dream:1034] ExecuteResult object initialized
 
     const limit = input?.limit ?? this.config.scheduler.maxMemoriesPerCycle;
     const maxRelations = this.config.scheduler.maxRelationsPerCycle;
-    // [dream:1037] limit and maxRelations calculated
 
-    this.logger.debug('[dream:1039] Execute parameters', { limit, maxRelations });
-    // [dream:1039] Parameters logged
+    this.logger.debug('Execute parameters', { limit, maxRelations });
 
     // Execute independent operations in parallel
-    // [dream:1042] Starting parallel execution
-
     // 1. Execute memory merge (parallel)
-    // [dream:1044] Starting merge operation
-    this.logger.debug('[dream:1045] Starting memory merge operation');
+    this.logger.debug('Starting memory merge operation');
     const mergePromise = (async () => {
-      // [dream:1047] Inside mergePromise
       const groups = analyzeResult.similarGroups.slice(0, limit);
-      // [dream:1048] Groups sliced
-      this.logger.debug('[dream:1049] Merge groups prepared', { groupCount: groups.length });
-      // [dream:1049] Group count logged
+      this.logger.debug('Merge groups prepared', { groupCount: groups.length });
 
       const mergeResults = await Promise.all(
         groups.map(group => this.memoryMerger.mergeGroup(group))
       );
-      // [dream:1053] All mergeGroup promises resolved
 
       const mergedCount = mergeResults.reduce((sum, r) => sum + r.mergedCount, 0);
       const storageFreed = mergeResults.reduce((sum, r) => sum + r.storageFreed, 0);
-      // [dream:1055] Results aggregated
-      this.logger.debug('[dream:1056] Merge operation completed', { mergedCount, storageFreed });
-      // [dream:1056] Merge results logged
+      this.logger.debug('Merge operation completed', { mergedCount, storageFreed });
 
       return { mergedCount, storageFreed };
-      // [dream:1058] Returning merge result
     })();
-    // [dream:1059] mergePromise created
 
     // 2. Rebuild graph relations (parallel)
-    // [dream:1061] Starting rebuild operation
-    this.logger.debug('[dream:1062] Starting graph rebuild operation');
+    this.logger.debug('Starting graph rebuild operation');
     const rebuildPromise = (async () => {
-      // [dream:1064] Inside rebuildPromise
       let rebuiltCount = 0;
       const relations = analyzeResult.brokenRelations.slice(0, maxRelations);
-      // [dream:1066] Relations sliced
-      this.logger.debug('[dream:1067] Relations to rebuild', { count: relations.length });
-      // [dream:1067] Relation count logged
+      this.logger.debug('Relations to rebuild', { count: relations.length });
 
       // Execute rebuildRelation serially (each relation needs separate processing)
-      // [dream:1069] Starting serial rebuild loop
       for (const relation of relations) {
-        // [dream:1070] Processing relation
         const success = await this.graphReorganizer.rebuildRelation(relation);
-        // [dream:1071] rebuildRelation completed
         if (success) {
           rebuiltCount++;
-          // [dream:1073] Relation rebuilt successfully
         }
-        // [dream:1074] Continuing to next relation
       }
-      // [dream:1075] Rebuild loop completed
-      this.logger.debug('[dream:1076] Rebuild operation completed', { rebuiltCount });
-      // [dream:1076] Rebuild results logged
+      this.logger.debug('Rebuild operation completed', { rebuiltCount });
 
       return rebuiltCount;
-      // [dream:1078] Returning rebuild count
     })();
-    // [dream:1079] rebuildPromise created
 
     // 3. Archive memories (parallel)
-    // [dream:1081] Starting archive operation
-    this.logger.debug('[dream:1082] Starting memory archive operation');
+    this.logger.debug('Starting memory archive operation');
     const archivePromise = this.storageOptimizer.archiveMemories(
       analyzeResult.archivalCandidates.slice(0, limit)
     );
-    // [dream:1086] archivePromise created
 
     // Wait for all parallel tasks to complete
-    // [dream:1088] Waiting for all parallel tasks
-    this.logger.debug('[dream:1089] Waiting for parallel tasks to complete');
+    this.logger.debug('Waiting for parallel tasks to complete');
     const [mergeResult, rebuiltCount, archivedCount] = await Promise.all([
       mergePromise,
       rebuildPromise,
       archivePromise,
     ]);
-    // [dream:1094] All parallel tasks resolved
 
-    this.logger.debug('[dream:1095] All parallel tasks completed', {
+    this.logger.debug('All parallel tasks completed', {
       mergeResult,
       rebuiltCount,
       archivedCount,
     });
-    // [dream:1096] Parallel results logged
 
     // Update results
-    // [dream:1098] Updating result object
     result.memoriesMerged = mergeResult.mergedCount;
     result.storageFreed = mergeResult.storageFreed;
     result.relationsRebuilt = rebuiltCount;
     result.memoriesArchived = archivedCount;
-    // [dream:1102] Result properties updated
 
     // Supplement new relations (execute after all other operations)
-    // [dream:1105] Supplementing new relations
-    this.logger.debug('[dream:1106] Supplementing new relations');
+    this.logger.debug('Supplementing new relations');
     const newRelations = await this.graphReorganizer.supplementRelations(
       maxRelations - result.relationsRebuilt
     );
-    // [dream:1109] supplementRelations returned
     result.relationsRebuilt += newRelations;
-    // [dream:1110] relationsRebuilt updated
-    this.logger.debug('[dream:1111] New relations supplemented', { newRelations, totalRelationsRebuilt: result.relationsRebuilt });
-    // [dream:1112] Supplement results logged
+    this.logger.debug('New relations supplemented', { newRelations, totalRelationsRebuilt: result.relationsRebuilt });
 
     // Execute date-based memory consolidation (Phase 3 extension)
+    // Only execute if LLM extractor is available to avoid wasted cycles
     // This consolidates today's memories using LLM if available
-    const consolidationStart = Date.now();
-    const consolidationResult = await this.consolidateMemories();
     if (this.llmExtractor) {
+      const consolidationStart = Date.now();
+      const consolidationResult = await this.consolidateMemories();
       result.consolidationProcessedCount = consolidationResult.processedCount;
       result.consolidationGroupsFormed = consolidationResult.groupsFormed;
       result.consolidationNewVersions = consolidationResult.newVersionsCreated;
       result.consolidationArchivedOldVersions = consolidationResult.archivedOldVersions;
-      this.logger.debug('[dream:1113] Daily consolidation completed', {
+      this.logger.debug('Daily consolidation completed', {
         processedCount: consolidationResult.processedCount,
         groupsFormed: consolidationResult.groupsFormed,
         newVersionsCreated: consolidationResult.newVersionsCreated,
         archivedOldVersions: consolidationResult.archivedOldVersions,
         duration: Date.now() - consolidationStart,
       });
+    } else {
+      this.logger.debug('Daily consolidation skipped - no LLM extractor available');
     }
 
-    this.logger.debug('[dream:1114] Phase 3: EXECUTE completed', {
+    this.logger.debug('Phase 3: EXECUTE completed', {
       memoriesMerged: result.memoriesMerged,
       memoriesArchived: result.memoriesArchived,
       memoriesDeleted: result.memoriesDeleted,
@@ -1278,10 +1197,8 @@ export class DreamingManager {
       storageFreed: result.storageFreed,
       duration: Date.now() - startTime,
     });
-    // [dream:1123] EXECUTE completion log written
 
     return result;
-    // [dream:1125] Returning ExecuteResult
   }
 
   // ============================================================
@@ -1361,11 +1278,19 @@ export class DreamingManager {
 
       // 检查是否需要归档
       if (metrics.staleMemories >= this.config.scheduler.memoryThreshold / 10) {
+        this.logger.debug('Trigger: staleMemories exceeds threshold', {
+          staleMemories: metrics.staleMemories,
+          threshold: this.config.scheduler.memoryThreshold / 10,
+        });
         return true;
       }
 
       // 检查孤儿节点
       if (metrics.orphanedMemories >= this.config.scheduler.memoryThreshold / 5) {
+        this.logger.debug('Trigger: orphanedMemories exceeds threshold', {
+          orphanedMemories: metrics.orphanedMemories,
+          threshold: this.config.scheduler.memoryThreshold / 5,
+        });
         return true;
       }
 
@@ -1412,12 +1337,9 @@ export class DreamingManager {
    * 更新调度配置
    */
   updateSchedulerConfig(config: Partial<DreamingSchedulerConfig>): void {
-    // [dream:1225] updateSchedulerConfig method entry
-    this.logger.debug('[dream:1226] Updating scheduler config', { newConfig: config });
-    // [dream:1227] Config logged
+    this.logger.debug('Updating scheduler config', { newConfig: config });
     this.config.scheduler = { ...this.config.scheduler, ...config };
-    // [dream:1229] scheduler config merged
-    this.logger.info('[dream:1230] Scheduler config updated', {
+    this.logger.info('Scheduler config updated', {
       autoOrganize: this.config.scheduler.autoOrganize,
       organizeInterval: this.config.scheduler.organizeInterval,
       fragmentationThreshold: this.config.scheduler.fragmentationThreshold,
@@ -1425,67 +1347,51 @@ export class DreamingManager {
       maxMemoriesPerCycle: this.config.scheduler.maxMemoriesPerCycle,
       maxRelationsPerCycle: this.config.scheduler.maxRelationsPerCycle,
     });
-    // [dream:1238] Scheduler config update logged
   }
 
   /**
    * Update consolidation config
    */
   updateConsolidationConfig(config: Partial<ConsolidationConfig>): void {
-    // [dream:1243] updateConsolidationConfig method entry
-    this.logger.debug('[dream:1244] Updating consolidation config', { newConfig: config });
-    // [dream:1245] Config logged
+    this.logger.debug('Updating consolidation config', { newConfig: config });
     this.config.consolidation = { ...this.config.consolidation, ...config };
-    // [dream:1247] consolidation config merged
     this.memoryMerger?.updateConfig(config);
-    // [dream:1249] memoryMerger config updated
-    this.logger.info('[dream:1250] Consolidation config updated', {
+    this.logger.info('Consolidation config updated', {
       similarityThreshold: this.config.consolidation.similarityThreshold,
       maxGroupSize: this.config.consolidation.maxGroupSize,
       preserveNewest: this.config.consolidation.preserveNewest,
       createNewVersion: this.config.consolidation.createNewVersion,
     });
-    // [dream:1256] Consolidation config update logged
   }
 
   /**
    * Update reorganization config
    */
   updateReorganizationConfig(config: Partial<ReorganizationConfig>): void {
-    // [dream:1261] updateReorganizationConfig method entry
-    this.logger.debug('[dream:1262] Updating reorganization config', { newConfig: config });
-    // [dream:1263] Config logged
+    this.logger.debug('Updating reorganization config', { newConfig: config });
     this.config.reorganization = { ...this.config.reorganization, ...config };
-    // [dream:1265] reorganization config merged
     this.graphReorganizer?.updateConfig(config);
-    // [dream:1267] graphReorganizer config updated
-    this.logger.info('[dream:1268] Reorganization config updated', {
+    this.logger.info('Reorganization config updated', {
       minEdgeWeight: this.config.reorganization.minEdgeWeight,
       densityTarget: this.config.reorganization.densityTarget,
       orphanThreshold: this.config.reorganization.orphanThreshold,
       maxNewRelationsPerCycle: this.config.reorganization.maxNewRelationsPerCycle,
     });
-    // [dream:1274] Reorganization config update logged
   }
 
   /**
    * Update archival config
    */
   updateArchivalConfig(config: Partial<ArchivalConfig>): void {
-    // [dream:1279] updateArchivalConfig method entry
-    this.logger.debug('[dream:1280] Updating archival config', { newConfig: config });
-    // [dream:1281] Config logged
+    this.logger.debug('Updating archival config', { newConfig: config });
     this.config.archival = { ...this.config.archival, ...config };
-    // [dream:1283] archival config merged
     this.storageOptimizer?.updateArchivalConfig(config);
-    // [dream:1285] storageOptimizer config updated
-    this.logger.info('[dream:1286] Archival config updated', {
+    this.logger.info('Archival config updated', {
       importanceThreshold: this.config.archival.importanceThreshold,
       stalenessDays: this.config.archival.stalenessDays,
       retentionDays: this.config.archival.retentionDays,
       archiveBlock: this.config.archival.archiveBlock,
     });
-    // [dream:1292] Archival config update logged
   }
 
   /**
@@ -1875,7 +1781,9 @@ export class DreamingManager {
     }
 
     // 5. 检查陈旧记忆
-    const staleThreshold = Date.now() - (30 * 24 * 60 * 60 * 1000); // 30天
+    // 使用 archival.stalenessDays 配置的阈值，而非硬编码 30 天
+    const stalenessMs = (this.config.archival?.stalenessDays ?? 30) * 24 * 60 * 60 * 1000;
+    const staleThreshold = Date.now() - stalenessMs;
     const staleMemories = memories.filter(m =>
       m.lastRecalledAt && m.lastRecalledAt < staleThreshold
     );

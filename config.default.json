@@ -1,12 +1,6 @@
 {
   "$schema": "./config.schema.json",
   "agentId": "default-agent",
-  "capture": {
-    "confidenceThreshold": 0.5,
-    "maxVersions": 5,
-    "enableAutoExtraction": false,
-    "extractionTimeout": 30000
-  },
   "llmExtraction": {
     "provider": "openai-compatible",
     "model": "gpt-4o-mini",
@@ -111,7 +105,8 @@
       "enableVectorSearch": true,
       "enableKeywordSearch": true,
       "vectorWeight": 0.7,
-      "keywordWeight": 0.3
+      "keywordWeight": 0.3,
+      "includeVersionChain": true
     },
     "forget": {
       "enabled": true,
@@ -131,6 +126,7 @@
       "enabled": true,
       "sessionToAgentDays": 7,
       "agentToGlobalDays": 30,
+      "globalToAgentDays": 365,
       "sessionUpgradeRecallThreshold": 5,
       "agentUpgradeRecallThreshold": 10,
       "upgradeScopeScoreMax": 10
@@ -228,7 +224,8 @@
       "maxVersionLocks": 100,
       "contentHashCacheSize": 1000,
       "enableIncrementalCapture": true,
-      "extractionTimeout": 30000
+      "extractionTimeout": 30000,
+      "conversationThreshold": 500
     },
     "roomManager": {
       "mergeThreshold": 10,
@@ -281,6 +278,7 @@
       "deleteThreshold": 1,
       "archiveThreshold": 3,
       "protectLevel": 7,
+      "archivedDecayMultiplier": 2.0,
       "aaakProtection": {
         "DECISION": 0.5,
         "CORE": 0.3,
@@ -332,6 +330,7 @@
     "consolidation": {
       "similarityThreshold": 0.85,
       "maxGroupSize": 5,
+      "maxTagsPerMemory": 10,
       "preserveNewest": true,
       "createNewVersion": true,
       "topicSimilarityThreshold": 0.5,
@@ -349,7 +348,13 @@
       "importanceThreshold": 2,
       "stalenessDays": 30,
       "archiveBlock": "archived",
-      "retentionDays": 90
+      "retentionDays": 90,
+      "archiveScoreThreshold": 50,
+      "archiveScoreWeights": {
+        "importanceWeight": 40,
+        "stalenessWeight": 35,
+        "recallWeight": 25
+      }
     },
     "defragmentation": {
       "fragmentationThreshold": 0.3,

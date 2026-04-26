@@ -216,6 +216,77 @@ export class PalaceStore implements IPalaceStore {
   }
 
   /**
+   * 复制 Palace 文件到新位置
+   * 用于原子性迁移：copy + deleteSourceOnly 替代 move
+   */
+  async copy(fromPalaceRef: string, toPalaceRef: string): Promise<void> {
+    await this.ensureInitialized();
+
+    const fromPath = this.getFilePath(fromPalaceRef);
+    const toPath = this.getFilePath(toPalaceRef);
+
+    if (fromPath === toPath) {
+      this.logger.debug('Palace copy skipped: same source and target', { palaceRef: fromPalaceRef });
+      return;
+    }
+
+    try {
+      // 检查源文件是否存在
+      let sourceExists = false;
+      try {
+        await fs.stat(fromPath);
+        sourceExists = true;
+      } catch (e: any) {
+        // File doesn't exist
+      }
+
+      if (!sourceExists) {
+        throw new Error(`Source palace file not found: ${fromPalaceRef}`);
+      }
+
+      // 确保目标目录存在
+      await FileUtils.ensureDirectory(dirname(toPath));
+
+      // 读取源文件内容
+      const data = await fs.readFile(fromPath, 'utf-8');
+      const record: PalaceRecord = JSON.parse(data);
+
+      // 更新 palaceRef 为新路径
+      record.palaceRef = toPalaceRef;
+
+      // 写入目标文件
+      await fs.writeFile(toPath, JSON.stringify(record, null, 2), 'utf-8');
+
+      this.logger.info('Palace record copied', { from: fromPalaceRef, to: toPalaceRef });
+    } catch (error) {
+      this.logger.error('Failed to copy palace record', { from: fromPalaceRef, to: toPalaceRef, error });
+      throw error;
+    }
+  }
+
+  /**
+   * 删除源文件（用于原子性迁移的 commit 阶段）
+   * 与 delete() 的区别是：deleteSourceOnly 不记录日志警告，只静默忽略不存在的文件
+   */
+  async deleteSourceOnly(palaceRef: string): Promise<void> {
+    await this.ensureInitialized();
+
+    const filePath = this.getFilePath(palaceRef);
+
+    try {
+      await fs.unlink(filePath);
+      this.logger.debug('Palace source file deleted', { palaceRef });
+    } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        // 文件不存在，静默忽略（可能在其他地方已经删除）
+        this.logger.debug('Palace source file already deleted or not found', { palaceRef });
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  /**
    * 移动/迁移 Palace 文件
    * 用于作用域升级/降级时的文件迁移
    * 使用原子操作：写入临时文件 → rename → 删除原文件

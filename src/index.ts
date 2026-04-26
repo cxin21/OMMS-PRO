@@ -457,7 +457,7 @@ async function startServer(): Promise<void> {
 
     if (llmConfig?.provider && llmConfig?.apiKey && llmConfig?.baseURL) {
       const provider = llmConfig.provider === 'openai-compatible' ? 'custom' : llmConfig.provider as 'anthropic' | 'openai' | 'custom';
-      console.log('[DEBUG] About to call createLLMExtractor with provider:', provider);
+      logger.debug('About to call createLLMExtractor', { provider });
       const extractor = createLLMExtractor({
         maxMemoriesPerCapture: 5,
         similarityThreshold: 0.9,
@@ -470,22 +470,22 @@ async function startServer(): Promise<void> {
       });
       // 设置 Agent 上下文提供器
       extractor.setAgentContextProvider(agentContextProvider);
-      console.log('[DEBUG] LLM Extractor created successfully, calling setLLMExtractor...');
+      logger.debug('LLM Extractor created, calling setLLMExtractor');
       try {
         memoryService.setLLMExtractor(extractor);
         dreamingManager.setLLMExtractor(extractor);
         profileManager.setLLMExtractor(extractor);
-        console.log('[DEBUG] setLLMExtractor completed');
+        logger.debug('setLLMExtractor completed');
         logger.info('LLM Extractor initialized', { provider: llmConfig.provider, model: llmConfig.model });
       } catch (e) {
-        console.error('[ERROR] setLLMExtractor failed:', e);
+        logger.error('setLLMExtractor failed', e instanceof Error ? e : new Error(String(e)));
       }
     } else {
-      console.log('[DEBUG] LLM not configured: provider=', llmConfig?.provider, 'apiKey=', !!llmConfig?.apiKey, 'baseURL=', !!llmConfig?.baseURL);
+      logger.debug('LLM not configured', { provider: llmConfig?.provider, hasApiKey: !!llmConfig?.apiKey, hasBaseURL: !!llmConfig?.baseURL });
       logger.warn('LLM Extractor not configured - missing provider, apiKey or baseURL');
     }
   } catch (error) {
-    console.error('[ERROR] Failed to initialize LLM Extractor:', error);
+    logger.error('Failed to initialize LLM Extractor', error instanceof Error ? error : new Error(String(error)));
     logger.warn('Failed to initialize LLM Extractor', { error: String(error) });
   }
 
@@ -511,7 +511,7 @@ async function startServer(): Promise<void> {
       logger.warn('[startServer] LLM Extractor not available for MemoryCaptureService');
     }
   } catch (error) {
-    console.error('[ERROR] Failed to initialize MemoryCaptureService:', error);
+    logger.error('Failed to initialize MemoryCaptureService', error instanceof Error ? error : new Error(String(error)));
     logger.warn('[startServer] Failed to initialize MemoryCaptureService', { error: String(error) });
   }
 

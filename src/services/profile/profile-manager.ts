@@ -297,7 +297,8 @@ export class ProfileManager {
 
   /**
    * v2.0.0: 保存 Persona 到 MemoryService 作为 PERSONA 记忆
-   * 使用 LLM 动态生成重要性评分
+   * 使用 LLM 动态生成重要性评分（如果 LLM Extractor 可用）
+   * 如果 LLM Extractor 不可用，使用默认评分（importance=8, scopeScore=8）
    */
   private async savePersonaToMemory(persona: Persona): Promise<void> {
     if (!this.memoryService) {
@@ -305,38 +306,43 @@ export class ProfileManager {
       return;
     }
 
-    if (!this.llmExtractor) {
-      throw new Error('ProfileManager: LLM Extractor is required for scoring persona');
+    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用默认值）
+    let importance: number;
+    let scopeScore: number;
+
+    if (this.llmExtractor) {
+      try {
+        const scores = await this.llmExtractor.generateScores(persona.name + ' ' + JSON.stringify(persona));
+        importance = scores.importance;
+        scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
+      } catch (error) {
+        this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
+        importance = 8;  // Persona 默认高重要性
+        scopeScore = 8;  // Persona 默认高作用域评分
+      }
+    } else {
+      // LLM Extractor 不可用，使用默认评分
+      this.logger.debug('LLM Extractor not available, using default scores for persona');
+      importance = 8;  // Persona 默认高重要性
+      scopeScore = 8;  // Persona 默认高作用域评分
     }
 
-    try {
-      // v2.0.0: 使用 LLM 生成动态评分
-      const scores = await this.llmExtractor.generateScores(persona.name + ' ' + JSON.stringify(persona));
-      const importance = scores.importance;
-      const scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
-
-      await this.memoryService.store(
-        {
-          content: JSON.stringify(persona),
-          type: MemoryType.PERSONA,
-          metadata: {
-            agentId: persona.userId,
-            subject: persona.name,
-            tags: ['persona', `v${persona.version}`],
-          },
+    await this.memoryService.store(
+      {
+        content: JSON.stringify(persona),
+        type: MemoryType.PERSONA,
+        metadata: {
+          agentId: persona.userId,
+          subject: persona.name,
+          tags: ['persona', `v${persona.version}`],
         },
-        {
-          importance,
-          scopeScore,
-        }
-      );
-      this.logger.debug('Persona saved to MemoryService', { userId: persona.userId, importance, scopeScore });
-    } catch (error) {
-      this.logger.error('Failed to save persona to MemoryService', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error; // LLM 评分失败必须抛出错误
-    }
+      },
+      {
+        importance,
+        scopeScore,
+      }
+    );
+    this.logger.debug('Persona saved to MemoryService', { userId: persona.userId, importance, scopeScore });
   }
 
   /**
@@ -428,7 +434,8 @@ export class ProfileManager {
 
   /**
    * v2.0.0: 保存 Preferences 到 MemoryService 作为 PREFERENCE 记忆
-   * 使用 LLM 动态生成重要性评分
+   * 使用 LLM 动态生成重要性评分（如果 LLM Extractor 可用）
+   * 如果 LLM Extractor 不可用，使用默认评分（importance=7, scopeScore=7）
    */
   private async savePreferencesToMemory(userId: string, preferences: UserPreferences): Promise<void> {
     if (!this.memoryService) {
@@ -436,37 +443,42 @@ export class ProfileManager {
       return;
     }
 
-    if (!this.llmExtractor) {
-      throw new Error('ProfileManager: LLM Extractor is required for scoring preferences');
+    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用默认值）
+    let importance: number;
+    let scopeScore: number;
+
+    if (this.llmExtractor) {
+      try {
+        const scores = await this.llmExtractor.generateScores(JSON.stringify(preferences));
+        importance = scores.importance;
+        scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
+      } catch (error) {
+        this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
+        importance = 7;  // Preferences 默认重要性
+        scopeScore = 7;  // Preferences 默认作用域评分
+      }
+    } else {
+      // LLM Extractor 不可用，使用默认评分
+      this.logger.debug('LLM Extractor not available, using default scores for preferences');
+      importance = 7;  // Preferences 默认重要性
+      scopeScore = 7;  // Preferences 默认作用域评分
     }
 
-    try {
-      // v2.0.0: 使用 LLM 生成动态评分
-      const scores = await this.llmExtractor.generateScores(JSON.stringify(preferences));
-      const importance = scores.importance;
-      const scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
-
-      await this.memoryService.store(
-        {
-          content: JSON.stringify(preferences),
-          type: MemoryType.PREFERENCE,
-          metadata: {
-            agentId: userId,
-            tags: ['preferences'],
-          },
+    await this.memoryService.store(
+      {
+        content: JSON.stringify(preferences),
+        type: MemoryType.PREFERENCE,
+        metadata: {
+          agentId: userId,
+          tags: ['preferences'],
         },
-        {
-          importance,
-          scopeScore,
-        }
-      );
-      this.logger.debug('Preferences saved to MemoryService', { userId, importance, scopeScore });
-    } catch (error) {
-      this.logger.error('Failed to save preferences to MemoryService', {
-        error: error instanceof Error ? error.message : error,
-      });
-      throw error; // LLM 评分失败必须抛出错误
-    }
+      },
+      {
+        importance,
+        scopeScore,
+      }
+    );
+    this.logger.debug('Preferences saved to MemoryService', { userId, importance, scopeScore });
   }
 
   /**

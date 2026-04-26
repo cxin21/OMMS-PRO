@@ -259,7 +259,8 @@ export class HybridSearch {
 
     const adjusted = results.map(r => ({
       ...r,
-      combinedScore: vw * r.vectorScore + bw * (r.bm25Score > 0 ? r.bm25Score / 100 : 0),
+      // 使用候选集中的最大 BM25 分数进行归一化，避免硬编码除数 100
+      combinedScore: vw * r.vectorScore + bw * (r.bm25Score > 0 ? r.bm25Score / Math.max(...results.map(x => x.bm25Score), 1) : 0),
     }));
 
     adjusted.sort((a, b) => b.combinedScore - a.combinedScore);

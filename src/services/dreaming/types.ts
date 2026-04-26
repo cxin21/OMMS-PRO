@@ -268,6 +268,8 @@ export interface ConsolidationConfig {
   similarityThreshold: number;
   /** 最大合并组大小, 默认 5 */
   maxGroupSize: number;
+  /** 最大标签数, 默认 10 (v2.1.0) */
+  maxTagsPerMemory: number;
   /** 是否保留最新版本 */
   preserveNewest: boolean;
   /** 内容差异大时是否创建版本 */
@@ -299,6 +301,18 @@ export interface ReorganizationConfig {
 }
 
 /**
+ * 归档评分权重配置
+ */
+export interface ArchiveScoreWeights {
+  /** 重要性权重, 默认 40 */
+  importanceWeight: number;
+  /** 陈旧度权重, 默认 35 */
+  stalenessWeight: number;
+  /** 召回频率权重, 默认 25 */
+  recallWeight: number;
+}
+
+/**
  * 归档清理配置 (v2.0.0)
  */
 export interface ArchivalConfig {
@@ -312,6 +326,8 @@ export interface ArchivalConfig {
   retentionDays: number;
   /** 综合评分阈值 (0-100), 默认 50 */
   archiveScoreThreshold: number;
+  /** 评分权重配置 (v2.1.0) */
+  archiveScoreWeights?: ArchiveScoreWeights;
 }
 
 /**

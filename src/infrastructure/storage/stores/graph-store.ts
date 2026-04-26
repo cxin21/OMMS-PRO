@@ -29,13 +29,20 @@ export class GraphStore implements IGraphStore {
   }
 
   /**
-   * 转义 SQL LIKE 模式中的特殊字符，防止注入
+   * 转义 SQL LIKE 模式中的特殊字符，防止注入和误匹配
+   * SQLite LIKE 模式中：
+   * - `%` 匹配任意字符序列
+   * - `_` 匹配单个任意字符
+   * - `'` 需要转义以防止 SQL 注入
+   * 由于内存 ID 包含下划线，必须转义 `_` 以避免误匹配
+   *
+   * @param value - 要转义的值
+   * @returns 转义后的值，可安全用于 LIKE 查询
    */
   private escapeLikeValue(value: string): string {
-    // Escape LIKE special characters: % and '
-    // Note: _ is NOT escaped because in SQLite LIKE, \_ means "literal backslash+underscore"
-    // which is not what we want. Memory IDs contain literal underscores that should be matched as-is.
-    return value.replace(/'/g, "''").replace(/%/g, '\\%');
+    // 转义所有 LIKE 元字符：%、_、'
+    // 使用 ESCAPE 子句将 \ 定义为转义字符
+    return value.replace(/'/g, "''").replace(/%/g, '\\%').replace(/_/g, '\\_');
   }
 
   /**

@@ -902,6 +902,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       await this.initialize();
     }
     // 迁移检查独立于初始化标志，保证热重载/已运行服务也能执行迁移
+    // 注意：runMigrations 必须是同步的且幂等的，因为不能 await 非异步调用
     if (!this.migrated) {
       this.runMigrations();
     }
@@ -909,15 +910,26 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
 
   /**
    * 执行增量 Schema 迁移（幂等，可多次调用）
+   * 注意：这是一个同步方法，必须幂等
    */
   private runMigrations(): void {
     try {
-      this.db.exec(`ALTER TABLE memory_meta ADD COLUMN usedByAgents TEXT NOT NULL DEFAULT '[]'`);
-      this.logger.info('Migration applied: added usedByAgents column to memory_meta');
-    } catch {
-      // 列已存在，忽略
+      // 检查列是否已存在（使用同步查询）
+      const result = this.db.exec("PRAGMA table_info(memory_meta)");
+      const columns = result[0]?.values?.map((row: any) => row[1]) || [];
+      if (!columns.includes('usedByAgents')) {
+        this.db.exec(`ALTER TABLE memory_meta ADD COLUMN usedByAgents TEXT NOT NULL DEFAULT '[]'`);
+        this.logger.info('Migration applied: added usedByAgents column to memory_meta');
+      } else {
+        this.logger.debug('Migration skipped: usedByAgents column already exists');
+      }
+      // 迁移成功后设置标志（即使列已存在也设置，避免重复检查）
+      this.migrated = true;
+    } catch (error) {
+      // 记录错误但仍设置标志，避免无限重试
+      this.logger.error('Migration failed', { error: String(error) });
+      this.migrated = true;  // 设置标志防止无限重试，即使失败也继续
     }
-    this.migrated = true;
   }
 
   /**

@@ -511,13 +511,14 @@ export class MemoryStoreManager {
     let vector: number[];
     if (!this.embedder) {
       // Embedder 未配置，使用零向量
-      this.logger.warn('Embedder not configured, using zero vector', { memoryId });
+      this.logger.error('Embedder not configured, using zero vector - semantic search will not work for this memory', { memoryId });
       vector = new Array(embeddingDimension).fill(0);
     } else {
       try {
         vector = await this.embedder(summary);
       } catch (error) {
-        this.logger.warn('Vector embedding failed, using zero vector', {
+        // 向量化失败是严重问题，记录错误级别日志
+        this.logger.error('Vector embedding failed, using zero vector - semantic search disabled', {
           memoryId,
           error: String(error),
         });
@@ -634,30 +635,30 @@ export class MemoryStoreManager {
       rollback: async () => { await this.palaceStore.delete(palaceRef); },
     });
 
-    // Graph 使用重试队列，不参与事务（失败不阻断主流程）
-    // Graph 操作是"尽力而为"模式，失败后重试，不回滚已成功的 Graph 操作
+    // Graph 操作使用真正的回滚
+    // 如果事务失败，Graph 数据也会被回滚删除
+    // 注意：回滚失败时不抛出错误，因为此时事务已经失败
+    // 回滚失败只记录日志，让上层决定如何处理
     this.txManager.registerOperation(tx.id, {
       layer: 'graph',
       operation: 'insert',
       targetId: memory.uid,
       commit: async () => {
+        await this.graphStore.addMemory(memory.uid, entities, edges);
+      },
+      rollback: async () => {
         try {
-          await this.graphStore.addMemory(memory.uid, entities, edges);
+          await this.graphStore.removeMemory(memory.uid);
+          this.logger.info('Graph rollback executed', { memoryId: memory.uid });
         } catch (error) {
-          // Graph 失败加入重试队列，不回滚
-          this.logger.warn('Graph write failed, queuing for retry', {
+          // 回滚失败只记录日志，不抛出错误
+          // 因为此时事务已经失败，继续抛出会造成更多混乱
+          this.logger.error('Graph rollback failed (non-critical)', {
             memoryId: memory.uid,
             error: String(error),
           });
-          this.graphRetryQueue.enqueue(memory.uid, entities, edges);
+          // 不抛出错误，让事务继续完成回滚流程
         }
-      },
-      // Graph 不回滚 - 因为 Graph 是非关键操作，且可能已经在其他事务中成功
-      // 如果事务失败后执行此回滚，会删除有效的 Graph 数据
-      rollback: async () => {
-        this.logger.debug('Graph rollback skipped (fire-and-forget with retry queue)', {
-          memoryId: memory.uid,
-        });
       },
     });
 
@@ -981,10 +982,15 @@ export class MemoryStoreManager {
     const edges: GraphEdgeRecord[] = [];
 
     // 1. 记忆本身作为实体节点
+    // 优先使用 summary（已经是 LLM 生成的精炼描述），避免长文本截断
+    // 如果没有 summary，则截取内容的前 100 字符（不跨单词截断）
     const memoryNodeId = memory.uid;
+    const entityLabel = memory.summary
+      ? (memory.summary.length > 100 ? memory.summary.substring(0, 100) + '...' : memory.summary)
+      : (memory.content.length > 100 ? memory.content.substring(0, 97) + '...' : memory.content);
     entities.push({
       id: memoryNodeId,
-      entity: memory.content.substring(0, 100),
+      entity: entityLabel,
       type: 'entity' as const,
       uid: memory.uid,
       memoryIds: [memory.uid],

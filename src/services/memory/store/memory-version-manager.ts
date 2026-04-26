@@ -378,7 +378,8 @@ export class MemoryVersionManager {
     try {
       newVector = await this.embedder(newSummary);
     } catch (error) {
-      this.logger.warn('Vector embedding failed in createVersion, using zero vector', {
+      // 向量化失败是严重问题，记录错误级别日志
+      this.logger.error('Vector embedding failed in createVersion, using zero vector - semantic search disabled', {
         existingMemoryId,
         error: String(error),
       });

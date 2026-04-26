@@ -361,6 +361,8 @@ export interface IPalaceStore {
 
   // 移动/迁移
   move(fromPalaceRef: string, toPalaceRef: string): Promise<void>;
+  copy(fromPalaceRef: string, toPalaceRef: string): Promise<void>;
+  deleteSourceOnly(palaceRef: string): Promise<void>;
 
   // 高级
   exportAll(): Promise<PalaceRecord[]>;

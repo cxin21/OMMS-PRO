@@ -28,6 +28,7 @@ import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logg
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
+import { DistributedLockManager } from '../utils/distributed-lock-manager';
 import { compressToAAAK, encodeAAAK } from '../aaak';
 import {
   IncrementalCaptureManager,
@@ -67,17 +68,14 @@ export class MemoryCaptureService {
   private incrementalCaptureManager: IncrementalCaptureManager;
 
   // 版本创建锁：防止并发创建导致同一版本组有多个最新版本
-  // key: versionGroupId, value: 锁的 Promise
-  private versionLocks = new Map<string, Promise<void>>();
-
-  // 锁的创建时间（用于 TTL 检测）
-  private versionLockTimestamps = new Map<string, number>();
+  // 使用分布式锁管理器，支持多进程/多实例环境
+  private distributedLockManager?: DistributedLockManager;
 
   // 锁的 TTL（毫秒），从 memoryService.capture.versionLockTTLMs 读取
   private versionLockTTLMs: number;
 
-  // 最大锁数量，从 memoryService.capture.maxVersionLocks 读取
-  private maxVersionLocks: number;
+  // 实例唯一标识（用于标识锁持有者）
+  private instanceId: string;
 
   constructor(
     private versionManager: MemoryVersionManager,
@@ -95,7 +93,12 @@ export class MemoryCaptureService {
     // 加载版本锁配置
     const captureConfig = config.getConfigOrThrow<Record<string, unknown>>('memoryService.capture');
     this.versionLockTTLMs = (captureConfig['versionLockTTLMs'] as number) ?? 30000;
-    this.maxVersionLocks = (captureConfig['maxVersionLocks'] as number) ?? 100;
+
+    // 生成实例唯一标识
+    this.instanceId = `capture-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+    // 初始化分布式锁管理器（延迟初始化，从配置读取 dbPath）
+    this.initializeDistributedLockManager();
 
     this.logger = createServiceLogger('MemoryCaptureService');
     this.inclusionDetector = new MemoryInclusionDetector();
@@ -103,6 +106,33 @@ export class MemoryCaptureService {
 
     // 使用 wrapWithErrorBoundary 包装 capture 方法
     this.capture = wrapWithErrorBoundary(this.logger, 'MemoryCaptureService.capture', this.capture.bind(this)) as any;
+  }
+
+  /**
+   * 初始化分布式锁管理器
+   * 从配置读取 metaStoreDbPath 并创建分布式锁管理器
+   */
+  private initializeDistributedLockManager(): void {
+    try {
+      const storageConfig = config.getConfig<{ metaStoreDbPath: string }>('memoryService.storage');
+      if (storageConfig?.metaStoreDbPath) {
+        // 使用与 metaStore 相同的数据库路径创建分布式锁管理器
+        this.distributedLockManager = new DistributedLockManager(
+          storageConfig.metaStoreDbPath,
+          this.versionLockTTLMs
+        );
+        this.logger.info('DistributedLockManager initialized', {
+          dbPath: storageConfig.metaStoreDbPath,
+          ttlMs: this.versionLockTTLMs,
+        });
+      } else {
+        // metaStoreDbPath 缺失导致无法初始化分布式锁，这是配置错误
+        this.logger.error('metaStoreDbPath not found in config - distributed version locking disabled');
+      }
+    } catch (error) {
+      // 版本锁初始化失败是严重问题，可能导致并发场景下数据不一致
+      this.logger.error('Failed to initialize DistributedLockManager - version locking disabled', { error: String(error) });
+    }
   }
 
   /**
@@ -348,8 +378,13 @@ export class MemoryCaptureService {
               releaseLock();
             }
           } else {
-            this.logger.warn('Failed to acquire version lock', { existingMemoryId: detection.existingMemoryId });
-            detection = { isNewVersion: false, existingMemoryId: null, similarity: 0 };
+            // 版本锁获取失败时，仍使用已有的检测结果（不丢弃有效的检测数据）
+            // 仅丢失了锁的二次确认保护，需要记录警告
+            this.logger.warn('Failed to acquire version lock, proceeding with existing detection result', {
+              existingMemoryId: detection.existingMemoryId,
+              isNewVersion: detection.isNewVersion,
+              similarity: detection.similarity,
+            });
           }
         }
 
@@ -390,17 +425,17 @@ export class MemoryCaptureService {
 
   /**
    * 从输入中提取文本
+   * 注意：此函数必须与 incremental-capture.ts 中的 extractContentText 保持一致
+   * 以确保内容 hash 计算和去重检测的一致性
    */
   private extractTextFromInput(input: CaptureInput): string {
     if (typeof input.content === 'string') {
       return input.content;
     }
 
-    // 处理对话轮次
+    // 处理对话轮次 - 使用与 incremental-capture.ts 相同的格式确保 hash 一致性
     const turns = input.content as Array<{ role: string; content: string }>;
-    return turns
-      .map(turn => `${turn.role === 'user' ? '用户' : '助手'}: ${turn.content}`)
-      .join('\n');
+    return turns.map(turn => `${turn.role}: ${turn.content}`).join('\n');
   }
 
   /**
@@ -732,98 +767,34 @@ export class MemoryCaptureService {
 
   /**
    * 获取版本锁
+   * 使用分布式锁管理器，支持多进程/多实例环境
    * @param versionGroupId 版本组 ID
    * @param timeoutMs 超时时间（毫秒）
    * @returns 释放锁的函数，如果超时返回 null
    */
   private async acquireVersionLock(versionGroupId: string, timeoutMs: number = 5000): Promise<(() => void) | null> {
-    const startTime = Date.now();
-    const now = Date.now();
-
-    // 检查并清理过期锁
-    this.cleanupExpiredLocks();
-
-    // 检查锁数量限制
-    if (this.versionLocks.size >= this.maxVersionLocks) {
-      this.logger.warn('Version lock map full, cleaning up oldest locks', {
-        size: this.versionLocks.size,
-        maxSize: this.maxVersionLocks,
-      });
-      this.cleanupOldestLocks();
+    if (!this.distributedLockManager) {
+      this.logger.warn('DistributedLockManager not available, skipping lock acquisition');
+      return null;
     }
 
-    while (Date.now() - startTime < timeoutMs) {
-      const existingLock = this.versionLocks.get(versionGroupId);
+    const lockKey = `version:${versionGroupId}`;
+    const releaseLock = await this.distributedLockManager.waitForLock(
+      lockKey,
+      this.instanceId,
+      timeoutMs
+    );
 
-      // 检查锁是否过期
-      if (existingLock) {
-        const lockAge = now - (this.versionLockTimestamps.get(versionGroupId) || 0);
-        if (lockAge > this.versionLockTTLMs) {
-          // 锁已过期，删除并创建新锁
-          this.versionLocks.delete(versionGroupId);
-          this.versionLockTimestamps.delete(versionGroupId);
-          this.logger.debug('Removed expired lock', { versionGroupId, lockAge });
-        } else {
-          // 有锁且未过期，等待释放
-          try {
-            await existingLock;
-          } catch {
-            // 忽略 Promise 的 rejection
-          }
-          // 等待后重试
-          await new Promise(resolve => setTimeout(resolve, 50));
-          continue;
-        }
-      }
-
-      // 没有锁（或已过期），创建新锁
-      let release: (() => void) | null = null;
-      const lockPromise = new Promise<void>(resolve => {
-        release = () => resolve();
-      });
-      this.versionLocks.set(versionGroupId, lockPromise);
-      this.versionLockTimestamps.set(versionGroupId, Date.now());
-      this.logger.debug('Version lock acquired', { versionGroupId });
+    if (releaseLock) {
+      this.logger.debug('Version lock acquired', { versionGroupId, instanceId: this.instanceId });
       return () => {
-        this.versionLocks.delete(versionGroupId);
-        this.versionLockTimestamps.delete(versionGroupId);
-        release?.();
-        this.logger.debug('Version lock released', { versionGroupId });
+        releaseLock();
+        this.logger.debug('Version lock released', { versionGroupId, instanceId: this.instanceId });
       };
     }
 
     this.logger.warn('Failed to acquire version lock', { versionGroupId, timeoutMs });
     return null;
-  }
-
-  /**
-   * 清理过期锁
-   */
-  private cleanupExpiredLocks(): void {
-    const now = Date.now();
-    for (const [key, timestamp] of this.versionLockTimestamps.entries()) {
-      if (now - timestamp > this.versionLockTTLMs) {
-        this.versionLocks.delete(key);
-        this.versionLockTimestamps.delete(key);
-        this.logger.debug('Cleaned up expired lock', { key, age: now - timestamp });
-      }
-    }
-  }
-
-  /**
-   * 清理最老的锁（当锁数量超限时）
-   */
-  private cleanupOldestLocks(): void {
-    // 按时间排序，删除最老的 N 个锁
-    const sortedEntries = [...this.versionLockTimestamps.entries()]
-      .sort((a, b) => a[1] - b[1]);
-
-    const toDelete = sortedEntries.slice(0, Math.floor(this.maxVersionLocks / 2));
-    for (const [key] of toDelete) {
-      this.versionLocks.delete(key);
-      this.versionLockTimestamps.delete(key);
-      this.logger.debug('Cleaned up oldest lock due to size limit', { key });
-    }
   }
 
   /**

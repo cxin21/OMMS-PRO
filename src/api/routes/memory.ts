@@ -42,14 +42,18 @@ function getDefaultSessionId(): string {
 
 /**
  * 获取对话内容检测阈值（用于决定是否使用 LLM 提取）
+ * 优先从 memoryService.capture.conversationThreshold 获取
+ * 降级使用 memoryService.store.chunkThreshold
  */
 function getConversationThreshold(): number {
   try {
     if (config.isInitialized()) {
+      // 优先从 memoryService.capture 获取
+      const captureConfig = config.getConfig('memoryService.capture') as any;
+      if (captureConfig?.conversationThreshold) return captureConfig.conversationThreshold;
+      // 降级使用 memoryService.store.chunkThreshold
       const storeConfig = config.getConfig('memoryService.store') as any;
       if (storeConfig?.chunkThreshold) return storeConfig.chunkThreshold;
-      const captureConfig = config.getConfig('capture') as any;
-      if (captureConfig?.conversationThreshold) return captureConfig.conversationThreshold;
     }
   } catch { /* ignore */ }
   return 500;

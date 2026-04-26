@@ -563,7 +563,22 @@ export class AnthropicExtractor extends BaseLLMExtractor {
     this.logger.debug('generateSummary called', { contentLength: content.length });
     const response = await this.callWithAgentContext(prompt, AgentType.MEMORY_CAPTURE);
     const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
-    const summary = (parsed.summary ?? '').substring(0, 50);
+    // 从 memoryService.store.summaryMaxLength 读取摘要最大长度（默认200）
+    // 注意：LLM 生成的摘要通常较短，50字符过于简短
+    let summaryMaxLength = 200;
+    try {
+      const { config } = require('../../../shared/config');
+      if (config.isInitialized()) {
+        const storeConfig = config.getConfig('memoryService.store') as { summaryMaxLength?: number } | undefined;
+        if (storeConfig?.summaryMaxLength) {
+          summaryMaxLength = storeConfig.summaryMaxLength;
+        }
+      }
+    } catch {
+      // ConfigManager 不可用，使用默认值
+    }
+
+    const summary = (parsed.summary ?? '').substring(0, summaryMaxLength);
     if (!summary) {
       throw new Error('LLM returned empty summary');
     }
@@ -929,7 +944,22 @@ export class OpenAIExtractor extends BaseLLMExtractor {
     this.logger.debug('generateSummary called', { contentLength: content.length });
     const response = await this.callWithAgentContext(prompt, AgentType.MEMORY_CAPTURE);
     const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
-    const summary = (parsed.summary ?? '').substring(0, 50);
+    // 从 memoryService.store.summaryMaxLength 读取摘要最大长度（默认200）
+    // 注意：LLM 生成的摘要通常较短，50字符过于简短
+    let summaryMaxLength = 200;
+    try {
+      const { config } = require('../../../shared/config');
+      if (config.isInitialized()) {
+        const storeConfig = config.getConfig('memoryService.store') as { summaryMaxLength?: number } | undefined;
+        if (storeConfig?.summaryMaxLength) {
+          summaryMaxLength = storeConfig.summaryMaxLength;
+        }
+      }
+    } catch {
+      // ConfigManager 不可用，使用默认值
+    }
+
+    const summary = (parsed.summary ?? '').substring(0, summaryMaxLength);
     if (!summary) {
       throw new Error('LLM returned empty summary');
     }
@@ -1284,7 +1314,22 @@ export class CustomExtractor extends BaseLLMExtractor {
 
     const response = await this.callLLM(prompt);
     const parsed = this.safeParseJson<{ summary?: string }>(response, 'summary');
-    const summary = (parsed.summary ?? '').substring(0, 50);
+    // 从 memoryService.store.summaryMaxLength 读取摘要最大长度（默认200）
+    // 注意：LLM 生成的摘要通常较短，50字符过于简短
+    let summaryMaxLength = 200;
+    try {
+      const { config } = require('../../../shared/config');
+      if (config.isInitialized()) {
+        const storeConfig = config.getConfig('memoryService.store') as { summaryMaxLength?: number } | undefined;
+        if (storeConfig?.summaryMaxLength) {
+          summaryMaxLength = storeConfig.summaryMaxLength;
+        }
+      }
+    } catch {
+      // ConfigManager 不可用，使用默认值
+    }
+
+    const summary = (parsed.summary ?? '').substring(0, summaryMaxLength);
     if (!summary) {
       throw new Error('LLM returned empty summary');
     }

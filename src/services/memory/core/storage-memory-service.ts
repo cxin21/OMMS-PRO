@@ -273,15 +273,13 @@ export class StorageMemoryService {
     });
 
     // 获取默认 agentId（优先从 options 获取，否则从 ConfigManager）
-    let defaultAgentId = 'default-agent';
+    // 注意：不允许在 ConfigManager 未初始化时使用硬编码默认值
+    let defaultAgentId: string;
     let defaultSessionId = 'default-session';
-    try {
-      if (config.isInitialized()) {
-        // 从 memoryService.agentId 获取配置
-        defaultAgentId = config.getConfig('memoryService.agentId') as string;
-      }
-    } catch {
-      // ConfigManager 未初始化，使用默认值
+    if (config.isInitialized()) {
+      defaultAgentId = config.getConfig('memoryService.agentId') as string;
+    } else {
+      throw new Error('StorageMemoryService: ConfigManager not initialized. Cannot determine default agentId.');
     }
 
     const result = await this.recallManager.recall({
