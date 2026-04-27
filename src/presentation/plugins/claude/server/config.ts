@@ -1,99 +1,82 @@
 /**
  * Server Configuration - Claude Plugin
  *
- * 优先从配置文件读取配置，如果配置系统未初始化则使用环境变量+默认值
+ * 所有配置必须从配置文件读取，禁止使用环境变量或硬编码默认值
  */
 
 import { config } from '../../../../shared/config';
 
-// 默认值（仅在配置系统未初始化时使用）
-// 注意：这些默认值仅在 ConfigManager 未初始化时使用，配置系统就绪后必须从配置读取
-const DEFAULT_API_PORT = '3000';
-const DEFAULT_API_PATH = '/api/v1';
-const DEFAULT_SESSION_PREFIX = 'session-';
-const DEFAULT_PROJECT_DIR = './data/sessions';
-
 /**
  * 获取 API URL
- * 优先从配置读取，其次环境变量，最后默认
+ * 必须从配置文件读取
  */
 export function getOmmsApiUrl(): string {
-  // 尝试从配置读取
-  if (config.isInitialized()) {
-    try {
-      const apiConfig = config.getConfig('api') as { port?: number; enabled?: boolean; host?: string } | undefined;
-      if (apiConfig?.enabled !== false && apiConfig?.port) {
-        // 使用配置的 host，默认 localhost
-        const host = apiConfig.host || 'localhost';
-        return `http://${host}:${apiConfig.port}${DEFAULT_API_PATH}`;
-      }
-    } catch {
-      // 配置读取失败，继续使用备用方案
-    }
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read API configuration.');
   }
 
-  // 备用：环境变量
-  const envUrl = process.env['OMMS_API_URL'];
-  if (envUrl) {
-    return envUrl;
+  const apiConfig = config.getConfig('api') as { port?: number; enabled?: boolean; host?: string; basePath?: string } | undefined;
+  if (!apiConfig?.enabled) {
+    throw new Error('API is not enabled in configuration');
+  }
+  if (!apiConfig?.port) {
+    throw new Error('API port is not configured');
+  }
+  if (!apiConfig?.host) {
+    throw new Error('API host is not configured');
   }
 
-  // 备用：环境变量端口
-  const envPort = process.env['OMMS_API_PORT'];
-  if (envPort) {
-    return `http://localhost:${envPort}${DEFAULT_API_PATH}`;
-  }
-
-  // 最终默认
-  return `http://localhost:${DEFAULT_API_PORT}${DEFAULT_API_PATH}`;
+  const apiPath = apiConfig.basePath || '/api/v1';
+  return `http://${apiConfig.host}:${apiConfig.port}${apiPath}`;
 }
 
 /**
  * 获取 Agent ID
- * 优先从配置读取，其次环境变量
+ * 必须从配置文件读取
  */
 export function getAgentId(): string {
-  if (config.isInitialized()) {
-    try {
-      const agentId = config.getConfig('agentId') as string | undefined;
-      if (agentId) {
-        return agentId;
-      }
-    } catch {
-      // 配置读取失败，继续使用环境变量
-    }
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read agentId configuration.');
   }
 
-  const envAgentId = process.env['OMMS_AGENT_ID'];
-  if (envAgentId) {
-    return envAgentId;
+  const agentId = config.getConfig('agentId') as string | undefined;
+  if (!agentId) {
+    throw new Error('agentId is not configured');
   }
-
-  // 配置不可用时抛出错误，禁止使用硬编码 fallback
-  throw new Error('ConfigManager not initialized and no OMMS_AGENT_ID environment variable');
+  return agentId;
 }
 
 /**
  * 获取会话 ID
- * 使用环境变量或生成时间戳会话 ID
+ * 从配置读取 sessionId 前缀，生成时间戳会话 ID
  */
 export function getSessionId(): string {
-  return process.env['OMMS_SESSION_ID'] || `${DEFAULT_SESSION_PREFIX}${Date.now()}`;
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read session configuration.');
+  }
+
+  const sessionPrefix = config.getConfig('sessionPrefix') as string | undefined;
+  if (!sessionPrefix) {
+    throw new Error('sessionPrefix is not configured');
+  }
+  return `${sessionPrefix}${Date.now()}`;
 }
 
 /**
  * 获取项目目录
- * 优先从环境变量，其次默认（不使用 /tmp）
+ * 必须从配置文件读取
  */
 export function getProjectDir(): string {
-  return process.env['CLAUDE_PROJECT_DIR'] || DEFAULT_PROJECT_DIR;
-}
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read project directory configuration.');
+  }
 
-// 导出兼容性别名（用于现有代码）
-export const OMMS_API_URL = getOmmsApiUrl();
-export const AGENT_ID = getAgentId();
-export const SESSION_ID = getSessionId();
-export const PROJECT_DIR = getProjectDir();
+  const projectDir = config.getConfig('projectDir') as string | undefined;
+  if (!projectDir) {
+    throw new Error('projectDir is not configured');
+  }
+  return projectDir;
+}
 
 /**
  * 会话上下文
@@ -102,17 +85,38 @@ export interface SessionContext {
   sessionId: string;
   agentId: string;
   projectDir: string;
+  conversationLogDir: string;
 }
 
 /**
  * 获取会话上下文
  */
 export function getSessionContext(params?: Record<string, unknown>): SessionContext {
+  const projectDir = (params?.['projectDir'] as string) || getProjectDir();
   return {
     sessionId: (params?.['sessionId'] as string) || getSessionId(),
     agentId: (params?.['agentId'] as string) || getAgentId(),
-    projectDir: (params?.['projectDir'] as string) || getProjectDir(),
+    projectDir,
+    conversationLogDir: getConversationLogDir(projectDir),
   };
+}
+
+/**
+ * 获取对话日志目录
+ * 从配置文件读取 conversationLogDir 配置，如果未配置则使用默认值
+ */
+function getConversationLogDir(projectDir: string): string {
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read conversation log directory configuration.');
+  }
+
+  const conversationConfig = config.getConfig('mcp') as { tools?: { conversationLogDir?: string } } | undefined;
+  const logDir = conversationConfig?.tools?.conversationLogDir || '.claude/omms-conversation';
+  // 如果是相对路径，基于 projectDir
+  if (logDir.startsWith('./') || !logDir.startsWith('/')) {
+    return `${projectDir}/${logDir}`;
+  }
+  return logDir;
 }
 
 /**
@@ -128,15 +132,34 @@ export function parseApiUrl(urlStr: string): { hostname: string; port: number; p
 }
 
 /**
+ * 获取 API 超时配置（毫秒）
+ * 必须从配置文件读取
+ */
+function getApiTimeout(): number {
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read API timeout configuration.');
+  }
+
+  const mcpConfig = config.getConfig('mcp') as { tools?: { timeout?: number } } | undefined;
+  const timeout = mcpConfig?.tools?.timeout;
+  if (!timeout) {
+    throw new Error('mcp.tools.timeout is not configured');
+  }
+  return timeout;
+}
+
+/**
  * 带超时的 fetch
  */
 export async function apiFetch(
   endpoint: string,
   options: RequestInit = {},
-  timeoutMs: number = 10000
+  timeoutMs?: number
 ): Promise<Response> {
+  // 从配置获取超时时间（如果未指定）
+  const timeout = timeoutMs ?? getApiTimeout();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeout);
   const apiUrl = getOmmsApiUrl();
 
   try {
@@ -148,10 +171,10 @@ export async function apiFetch(
         ...options.headers,
       },
     });
-    clearTimeout(timeout);
+    clearTimeout(timer);
     return response;
   } catch (error) {
-    clearTimeout(timeout);
+    clearTimeout(timer);
     throw error;
   }
 }

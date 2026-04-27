@@ -64,39 +64,39 @@ export class ProfileManager {
   constructor(options?: ProfileManagerOptions) {
     this.logger = createServiceLogger('ProfileManager');
 
-    // 获取缓存配置（必须从 ConfigManager 获取，检查初始化状态）
-    let cacheSize = 1000;  // 默认值
-    let cacheTtl = 3600000;  // 默认值 1小时
-
-    if (config.isInitialized()) {
-      try {
-        const memoryServiceConfig = config.getConfigOrThrow<{ maxSize: number; ttl: number }>('memoryService.cache');
-        cacheSize = memoryServiceConfig.maxSize;
-        cacheTtl = memoryServiceConfig.ttl;
-      } catch (e) {
-        this.logger.warn('Failed to load memoryService.cache config, using defaults', { error: String(e) });
-      }
-    } else {
-      this.logger.warn('ConfigManager not initialized, using default cache config');
+    // 获取缓存配置（必须从 ConfigManager 获取）
+    if (!config.isInitialized()) {
+      throw new Error('ConfigManager not initialized. Cannot read memoryService.cache configuration.');
     }
+
+    const memoryServiceConfig = config.getConfigOrThrow<{ maxSize: number; ttl: number }>('memoryService.cache');
+    const cacheSize = memoryServiceConfig.maxSize;
+    const cacheTtl = memoryServiceConfig.ttl;
 
     // 配置管理 - 从 ConfigManager 获取存储路径
-    let profileDbPath = './data/profile.db';  // 默认值
+    const storageConfig = config.getConfigOrThrow<{ profileDbPath: string }>('memoryService.storage');
+    const profileDbPath = storageConfig.profileDbPath;
 
-    if (config.isInitialized()) {
-      try {
-        const storageConfig = config.getConfigOrThrow<{ profileDbPath: string }>('memoryService.storage');
-        profileDbPath = storageConfig.profileDbPath;
-      } catch (e) {
-        this.logger.warn('Failed to load memoryService.storage config, using defaults', { error: String(e) });
-      }
-    }
+    // 获取默认评分配置
+    const profileServiceConfig = config.getConfigOrThrow<{
+      defaultScores: {
+        personaImportance: number;
+        personaScopeScore: number;
+        identityImportance: number;
+        identityScopeScore: number;
+        preferenceImportance: number;
+        preferenceScopeScore: number;
+      };
+    }>('memoryService.profileService');
+
+    const defaultScores = profileServiceConfig.defaultScores;
 
     this.config = {
       storage: {
         dbPath: options?.storagePath ?? profileDbPath,
         enableCache: true,
         cacheSize,
+        cacheTtl,
       },
       persona: {
         autoBuild: true,
@@ -118,6 +118,7 @@ export class ProfileManager {
         level: 'info',
         enableFileLogging: false,
       },
+      defaultScores,
     };
 
     // 合并用户配置
@@ -312,7 +313,7 @@ export class ProfileManager {
   /**
    * v2.0.0: 保存 Persona 到 MemoryService 作为 PERSONA 记忆
    * 使用 LLM 动态生成重要性评分（如果 LLM Extractor 可用）
-   * 如果 LLM Extractor 不可用，使用默认评分（importance=8, scopeScore=8）
+   * 如果 LLM Extractor 不可用，使用配置的默认评分
    */
   private async savePersonaToMemory(persona: Persona): Promise<void> {
     if (!this.memoryService) {
@@ -320,7 +321,10 @@ export class ProfileManager {
       return;
     }
 
-    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用默认值）
+    // 从配置读取默认评分
+    const defaultScores = this.config.defaultScores;
+
+    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用配置默认值）
     let importance: number;
     let scopeScore: number;
 
@@ -330,15 +334,15 @@ export class ProfileManager {
         importance = scores.importance;
         scopeScore = scores.scopeScore;
       } catch (error) {
-        this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
-        importance = 8;  // Persona 默认高重要性
-        scopeScore = 8;  // Persona 默认高作用域评分
+        this.logger.warn('LLM scoring failed, using configured default scores', { error: String(error) });
+        importance = defaultScores.personaImportance;
+        scopeScore = defaultScores.personaScopeScore;
       }
     } else {
-      // LLM Extractor 不可用，使用默认评分
-      this.logger.debug('LLM Extractor not available, using default scores for persona');
-      importance = 8;  // Persona 默认高重要性
-      scopeScore = 8;  // Persona 默认高作用域评分
+      // LLM Extractor 不可用，使用配置的默认评分
+      this.logger.debug('LLM Extractor not available, using configured default scores for persona');
+      importance = defaultScores.personaImportance;
+      scopeScore = defaultScores.personaScopeScore;
     }
 
     await this.memoryService.store(
@@ -424,7 +428,7 @@ export class ProfileManager {
 
   /**
    * v2.0.0: 保存 Identity 到 MemoryService 作为 IDENTITY 记忆
-   * IDENTITY 类型永不遗忘，importance 和 scopeScore 使用最高值
+   * IDENTITY 类型永不遗忘，使用配置的默认评分
    */
   private async saveIdentityToMemory(userId: string, identity: Identity): Promise<void> {
     if (!this.memoryService) {
@@ -432,25 +436,28 @@ export class ProfileManager {
       return;
     }
 
-    // IDENTITY 类型使用高重要性评分确保永不遗忘
-    // 即使 LLM 评分较低，也使用保护值
+    // 从配置读取默认评分
+    const defaultScores = this.config.defaultScores;
+
+    // IDENTITY 类型使用配置的默认评分确保永不遗忘
     let importance: number;
     let scopeScore: number;
 
     if (this.llmExtractor) {
       try {
         const scores = await this.llmExtractor.generateScores(JSON.stringify(identity));
-        importance = Math.max(scores.importance, 8);  // 确保最低 8
-        scopeScore = Math.max(scores.scopeScore, 8);
+        // IDENTITY 使用配置的默认值，不低于配置的保护值
+        importance = Math.max(scores.importance, defaultScores.identityImportance);
+        scopeScore = Math.max(scores.scopeScore, defaultScores.identityScopeScore);
       } catch (error) {
-        this.logger.warn('LLM scoring failed for identity, using protected scores', { error: String(error) });
-        importance = 9;  // Identity 默认高重要性（保护级）
-        scopeScore = 9;
+        this.logger.warn('LLM scoring failed for identity, using configured protected scores', { error: String(error) });
+        importance = defaultScores.identityImportance;
+        scopeScore = defaultScores.identityScopeScore;
       }
     } else {
-      this.logger.debug('LLM Extractor not available, using protected scores for identity');
-      importance = 9;  // Identity 默认高重要性（保护级）
-      scopeScore = 9;
+      this.logger.debug('LLM Extractor not available, using configured protected scores for identity');
+      importance = defaultScores.identityImportance;
+      scopeScore = defaultScores.identityScopeScore;
     }
 
     await this.memoryService.store(
@@ -532,7 +539,7 @@ export class ProfileManager {
   /**
    * v2.0.0: 保存 Preferences 到 MemoryService 作为 PREFERENCE 记忆
    * 使用 LLM 动态生成重要性评分（如果 LLM Extractor 可用）
-   * 如果 LLM Extractor 不可用，使用默认评分（importance=7, scopeScore=7）
+   * 如果 LLM Extractor 不可用，使用配置的默认评分
    */
   private async savePreferencesToMemory(userId: string, preferences: UserPreferences): Promise<void> {
     if (!this.memoryService) {
@@ -540,7 +547,10 @@ export class ProfileManager {
       return;
     }
 
-    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用默认值）
+    // 从配置读取默认评分
+    const defaultScores = this.config.defaultScores;
+
+    // 确定 importance 和 scopeScore（优先使用 LLM 评分，否则使用配置默认值）
     let importance: number;
     let scopeScore: number;
 
@@ -550,15 +560,15 @@ export class ProfileManager {
         importance = scores.importance;
         scopeScore = scores.scopeScore;
       } catch (error) {
-        this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
-        importance = 7;  // Preferences 默认重要性
-        scopeScore = 7;  // Preferences 默认作用域评分
+        this.logger.warn('LLM scoring failed, using configured default scores', { error: String(error) });
+        importance = defaultScores.preferenceImportance;
+        scopeScore = defaultScores.preferenceScopeScore;
       }
     } else {
-      // LLM Extractor 不可用，使用默认评分
-      this.logger.debug('LLM Extractor not available, using default scores for preferences');
-      importance = 7;  // Preferences 默认重要性
-      scopeScore = 7;  // Preferences 默认作用域评分
+      // LLM Extractor 不可用，使用配置的默认评分
+      this.logger.debug('LLM Extractor not available, using configured default scores for preferences');
+      importance = defaultScores.preferenceImportance;
+      scopeScore = defaultScores.preferenceScopeScore;
     }
 
     await this.memoryService.store(
@@ -1071,6 +1081,9 @@ export class ProfileManager {
     }
     if (userConfig.logging) {
       Object.assign(this.config.logging, userConfig.logging);
+    }
+    if (userConfig.defaultScores) {
+      Object.assign(this.config.defaultScores, userConfig.defaultScores);
     }
   }
 

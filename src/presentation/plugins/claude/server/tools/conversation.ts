@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../../../../shared/logging';
 import type { ILogger } from '../../../../../shared/logging';
-import { getSessionContext, apiFetch, OMMS_API_URL } from '../config';
+import { getSessionContext, apiFetch } from '../config';
 
 // 统一日志系统 - 输出到控制台方便调试
 const logger: ILogger = createLogger('ConversationTools', {
@@ -63,11 +63,10 @@ export function getConversationTools(): MCPTool[] {
         },
         handler: async (params: ToolHandlerParams): Promise<MCPToolResult> => {
           try {
-            const { sessionId, agentId, projectDir } = getSessionContext(params);
+            const { sessionId, agentId, conversationLogDir } = getSessionContext(params);
 
             // 确保目录存在
-            const convLogDir = path.join(projectDir, '.claude', 'omms-conversation');
-            fs.mkdirSync(convLogDir, { recursive: true });
+            fs.mkdirSync(conversationLogDir, { recursive: true });
 
             // 创建记录条目
             const entry: ConversationEntry = {
@@ -79,7 +78,7 @@ export function getConversationTools(): MCPTool[] {
               source: 'mcp-omms_record_context',
             };
 
-            const logFile = path.join(convLogDir, `${sessionId}.jsonl`);
+            const logFile = path.join(conversationLogDir, `${sessionId}.jsonl`);
             fs.appendFileSync(logFile, JSON.stringify(entry) + '\n');
 
             const fileSize = fs.statSync(logFile).size;
@@ -143,10 +142,9 @@ export function getConversationTools(): MCPTool[] {
         },
         handler: async (params: ToolHandlerParams): Promise<MCPToolResult> => {
           try {
-            const { sessionId, agentId, projectDir } = getSessionContext(params);
+            const { sessionId, agentId, conversationLogDir } = getSessionContext(params);
 
-            const convLogDir = path.join(projectDir, '.claude', 'omms-conversation');
-            const logFile = path.join(convLogDir, `${sessionId}.jsonl`);
+            const logFile = path.join(conversationLogDir, `${sessionId}.jsonl`);
 
             logger.info('omms_capture_session: Starting session capture', { sessionId, logFile });
 
@@ -222,7 +220,7 @@ export function getConversationTools(): MCPTool[] {
                 captureMode: 'full_conversation',
                 userMessageCount: userMessages.length,
                 assistantMessageCount: assistantMessages.length,
-                projectDir,
+                conversationLogDir,
                 originalContentLength,
               },
             };

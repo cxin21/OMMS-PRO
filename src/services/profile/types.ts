@@ -679,6 +679,7 @@ export interface ProfileManagerConfig {
     dbPath: string;
     enableCache: boolean;
     cacheSize: number;
+    cacheTtl: number;
   };
   persona: {
     autoBuild: boolean;
@@ -699,6 +700,14 @@ export interface ProfileManagerConfig {
   logging: {
     level: LogLevel;
     enableFileLogging: boolean;
+  };
+  defaultScores: {
+    personaImportance: number;
+    personaScopeScore: number;
+    identityImportance: number;
+    identityScopeScore: number;
+    preferenceImportance: number;
+    preferenceScopeScore: number;
   };
 }
 

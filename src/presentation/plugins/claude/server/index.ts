@@ -13,7 +13,7 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getConversationTools } from './tools/conversation.js';
-import { OMMS_API_URL, AGENT_ID, apiFetch } from './config';
+import { getOmmsApiUrl, getAgentId, apiFetch } from './config';
 
 const logger = {
   info: (msg: string, data?: Record<string, unknown>) => {
@@ -283,7 +283,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           method: 'POST',
           body: JSON.stringify({
             content,
-            agentId: AGENT_ID,
+            agentId: getAgentId(),
             sessionId: sessionId || `session-${Date.now()}`,
             type,
             scores: { importance, scopeScore: importance },
@@ -454,7 +454,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Start the server
 async function main() {
-  await writeLog('info', 'OMMS-PRO Memory Plugin starting...', { apiUrl: OMMS_API_URL, agentId: AGENT_ID });
+  await writeLog('info', 'OMMS-PRO Memory Plugin starting...', { apiUrl: getOmmsApiUrl(), agentId: getAgentId() });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

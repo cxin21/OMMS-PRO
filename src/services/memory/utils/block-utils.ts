@@ -27,36 +27,22 @@ export interface ScopeUpgradeThresholds {
   agentToGlobalImportance: number;
 }
 
-const FALLBACK_THRESHOLDS: ScopeUpgradeThresholds = {
-  sessionToAgentImportance: 5,
-  agentToGlobalScopeScore: 10,
-  agentToGlobalImportance: 7,
-};
-
 export function getScopeUpgradeThresholds(): ScopeUpgradeThresholds {
   if (!config.isInitialized()) {
-    // ConfigManager 未初始化，返回安全的默认值（不会导致误触发）
-    return FALLBACK_THRESHOLDS;
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.scopeDegradation for scope upgrade thresholds.');
   }
 
-  try {
-    // 统一从 memoryService.scopeDegradation 读取所有升级阈值
-    const scopeConfig = config.getConfigOrThrow<{
-      sessionUpgradeRecallThreshold: number;
-      upgradeScopeScoreMax: number;
-      agentToGlobalImportance?: number; // 新增：可选字段，用于 AGENT→GLOBAL 的 importance 阈值
-    }>('memoryService.scopeDegradation');
+  const scopeConfig = config.getConfigOrThrow<{
+    sessionUpgradeRecallThreshold: number;
+    upgradeScopeScoreMax: number;
+    agentToGlobalImportance?: number;
+  }>('memoryService.scopeDegradation');
 
-    return {
-      sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold,
-      agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax,
-      // 优先从 scopeDegradation 读取，如果不存在则回退到 store.scopeUpgradeThresholds
-      agentToGlobalImportance: scopeConfig.agentToGlobalImportance ?? FALLBACK_THRESHOLDS.agentToGlobalImportance,
-    };
-  } catch (error) {
-    // 配置读取失败，返回安全的默认值
-    return FALLBACK_THRESHOLDS;
-  }
+  return {
+    sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold,
+    agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax,
+    agentToGlobalImportance: scopeConfig.agentToGlobalImportance ?? 7,
+  };
 }
 
 /**
@@ -100,32 +86,20 @@ export function shouldUpgradeScope(
  * const block = deriveBlock(1); // => MemoryBlock.ARCHIVED
  */
 export function deriveBlock(importance: number): MemoryBlock {
-  // 默认阈值配置（当 ConfigManager 未初始化时使用）
-  const DEFAULT_THRESHOLDS = {
-    coreMinImportance: 7,
-    sessionMinImportance: 4,
-    workingMinImportance: 2,
-    archivedMinImportance: 1,
-  };
-
-  let thresholds = DEFAULT_THRESHOLDS;
-
-  if (config.isInitialized()) {
-    try {
-      const storeConfig = config.getConfigOrThrow<{
-        blockThresholds: {
-          coreMinImportance: number;
-          sessionMinImportance: number;
-          workingMinImportance: number;
-          archivedMinImportance: number;
-        };
-      }>('memoryService.store');
-
-      thresholds = storeConfig.blockThresholds;
-    } catch {
-      // 配置读取失败，使用默认阈值
-    }
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.store.blockThresholds.');
   }
+
+  const storeConfig = config.getConfigOrThrow<{
+    blockThresholds: {
+      coreMinImportance: number;
+      sessionMinImportance: number;
+      workingMinImportance: number;
+      archivedMinImportance: number;
+    };
+  }>('memoryService.store');
+
+  const thresholds = storeConfig.blockThresholds;
 
   if (importance >= thresholds.coreMinImportance) {
     return MemoryBlock.CORE;

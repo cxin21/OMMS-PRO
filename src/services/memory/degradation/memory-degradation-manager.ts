@@ -45,20 +45,14 @@ const AAAK_MAX_PROTECTION = 1.0;
 /**
  * 获取 AAAK Flag 保护系数
  * 从 memoryService.degradation.aaakProtection 配置读取
+ * 必须从配置读取，禁止使用硬编码默认值
  */
 function getAAAKFlagProtection(): Record<string, number> {
-  try {
-    const degradationConfig = config.getConfigOrThrow<{ aaakProtection: Record<string, number> }>('memoryService.degradation');
-    return degradationConfig.aaakProtection;
-  } catch {
-    // 配置不存在时使用默认值（兼容旧版本）
-    return {
-      DECISION: 0.5,
-      CORE: 0.3,
-      PIVOT: 0.4,
-      TECHNICAL: 0.2,
-    };
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.degradation.aaakProtection.');
   }
+  const degradationConfig = config.getConfigOrThrow<{ aaakProtection: Record<string, number> }>('memoryService.degradation');
+  return degradationConfig.aaakProtection;
 }
 
 /**
@@ -209,29 +203,23 @@ export interface DegradationStats {
 /**
  * 获取降级配置
  * 从 ConfigManager 读取配置，所有配置必须来自 ConfigManager
- * 如果配置中缺少 archivedDecayMultiplier，使用默认值 2.0
  */
 function getDegradationConfig(): DegradationConfig {
-  const cfg = config.getConfigOrThrow<DegradationConfig>('memoryService.degradation');
-  // 确保 archivedDecayMultiplier 存在（向后兼容）
-  if (cfg.archivedDecayMultiplier === undefined) {
-    cfg.archivedDecayMultiplier = 2.0;
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.degradation.');
   }
-  return cfg;
+  return config.getConfigOrThrow<DegradationConfig>('memoryService.degradation');
 }
 
 /**
  * 获取作用域降级配置
  * 所有配置必须来自 ConfigManager
- * 如果配置中缺少 globalToAgentDays，使用默认值 365（天）
  */
 function getScopeDegradationConfig(): ScopeDegradationConfig {
-  const scopeConfig = config.getConfigOrThrow<ScopeDegradationConfig>('memoryService.scopeDegradation');
-  // 确保 globalToAgentDays 存在（向后兼容）
-  if (scopeConfig.globalToAgentDays === undefined) {
-    scopeConfig.globalToAgentDays = 365; // 默认365天不访问才降级
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.scopeDegradation.');
   }
-  return scopeConfig;
+  return config.getConfigOrThrow<ScopeDegradationConfig>('memoryService.scopeDegradation');
 }
 
 /**
