@@ -29,19 +29,23 @@ export interface ScopeUpgradeThresholds {
 
 export function getScopeUpgradeThresholds(): ScopeUpgradeThresholds {
   if (!config.isInitialized()) {
-    throw new Error('ConfigManager not initialized. Cannot read memoryService.scopeDegradation for scope upgrade thresholds.');
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.store.scopeUpgradeThresholds for scope upgrade thresholds.');
   }
 
-  const scopeConfig = config.getConfigOrThrow<{
-    sessionUpgradeRecallThreshold: number;
-    upgradeScopeScoreMax: number;
-    agentToGlobalImportance?: number;
-  }>('memoryService.scopeDegradation');
+  // 从 memoryService.store.scopeUpgradeThresholds 读取升级阈值
+  // 注意：sessionToAgentImportance 是基于 importanceScore 的阈值，不是 recall count
+  const storeConfig = config.getConfigOrThrow<{
+    scopeUpgradeThresholds: {
+      sessionToAgentImportance: number;
+      agentToGlobalScopeScore: number;
+      agentToGlobalImportance: number;
+    };
+  }>('memoryService.store');
 
   return {
-    sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold,
-    agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax,
-    agentToGlobalImportance: scopeConfig.agentToGlobalImportance ?? 7,
+    sessionToAgentImportance: storeConfig.scopeUpgradeThresholds.sessionToAgentImportance,
+    agentToGlobalScopeScore: storeConfig.scopeUpgradeThresholds.agentToGlobalScopeScore,
+    agentToGlobalImportance: storeConfig.scopeUpgradeThresholds.agentToGlobalImportance,
   };
 }
 

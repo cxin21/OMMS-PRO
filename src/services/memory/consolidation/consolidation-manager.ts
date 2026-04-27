@@ -438,7 +438,10 @@ export class ConsolidationManager {
         // 5. 删除被合并记忆的向量
         await this.vectorStore.delete(memory.uid);
 
-        // 6. 从 Episode 中移除被合并记忆
+        // 6. 删除被合并记忆的知识图谱数据
+        await this.graphStore.removeMemory(memory.uid);
+
+        // 7. 从 Episode 中移除被合并记忆
         const episodeIds = await this.findEpisodesContaining(memory.uid);
         for (const episodeId of episodeIds) {
           await this.episodeStore.removeMemory(episodeId, memory.uid);

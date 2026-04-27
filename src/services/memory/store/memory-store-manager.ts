@@ -879,6 +879,23 @@ export class MemoryStoreManager {
       throw error;
     }
 
+    // 当内容变更时，清理旧的图谱实体链接
+    // 图谱中的实体是从旧内容提取的，内容变更后实体可能不再准确
+    // 调用方应该重新提取实体并调用 addMemory 来更新图谱
+    // 如果调用方不更新图谱，旧的不准确实体链接会被保留但不会影响记忆的核心功能
+    if (updates.content) {
+      try {
+        await this.graphStore.removeMemory(memoryId);
+        this.logger.debug('Graph entries cleaned up after content update', { memoryId });
+      } catch (graphError) {
+        // 图谱清理失败不影响主流程，只记录日志
+        this.logger.warn('Failed to clean up graph entries after content update', {
+          memoryId,
+          error: graphError instanceof Error ? graphError.message : String(graphError),
+        });
+      }
+    }
+
     this.logger.info('Memory updated via MemoryStoreManager', { memoryId });
   }
 

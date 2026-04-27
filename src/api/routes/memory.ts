@@ -78,6 +78,13 @@ export interface MemoryRoutesDeps {
 export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
   const router = Router();
 
+  // Debug log for captureService
+  if (deps.captureService) {
+    console.log('[createMemoryRoutes] captureService is available');
+  } else {
+    console.log('[createMemoryRoutes] captureService is UNDEFINED - LLM extraction will be skipped');
+  }
+
   /**
    * GET /api/memories
    * 获取所有记忆列表（不带召回语义，不更新访问统计）
@@ -171,7 +178,12 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
       // 如果提供了 captureService 且内容是对话或显式要求使用 LLM 提取
       if (deps.captureService && shouldUseLLMExtraction) {
-        console.log('[capture] Using LLM extraction for conversation content, length:', finalContent.length);
+        console.log('[capture] Using LLM extraction - captureService available, content length:', finalContent.length);
+        if (deps.logger) {
+          deps.logger.info('[capture] Using LLM extraction for conversation content', { contentLength: finalContent.length });
+        } else {
+          console.log('[capture] Using LLM extraction for conversation content, length:', finalContent.length);
+        }
 
         const captureResult = await deps.captureService.capture({
           agentId: finalAgentId,
@@ -210,6 +222,9 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
       }
 
       // 直接存储模式（短内容或没有 captureService）
+      if (!deps.captureService) {
+        console.log('[capture] Skipping LLM extraction - captureService is undefined, content length:', finalContent.length);
+      }
       const storeConfig = config.getConfig<{ defaultImportance?: number; defaultScopeScore?: number }>('memoryService.store');
       const defaultImportance = storeConfig?.defaultImportance ?? 5;
       const defaultScopeScore = storeConfig?.defaultScopeScore ?? defaultImportance;

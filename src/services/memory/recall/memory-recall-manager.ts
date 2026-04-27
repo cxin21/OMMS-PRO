@@ -892,8 +892,12 @@ export class MemoryRecallManager {
           metadata: r.metadata as unknown as Record<string, unknown>,
         }));
 
-        // 执行 BM25 重排序
-        const reranked = rerankWithBM25(bm25Input, params.query);
+        // 执行 BM25 重排序，使用配置的权重
+        // 注意：HybridSearchConfig 中是 bm25Weight，对应配置中的 keywordWeight
+        const reranked = rerankWithBM25(bm25Input, params.query, {
+          vectorWeight: this.config.vectorWeight,
+          bm25Weight: this.config.keywordWeight,
+        });
 
         // 根据重排序结果调整 finalFiltered 的顺序
         const rerankedMap = new Map(reranked.map((r, i) => [r.uid, { rank: i, score: r.combinedScore }]));

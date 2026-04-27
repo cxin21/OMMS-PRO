@@ -321,9 +321,12 @@ export const memoryApi = {
       sessionId?: string
       type?: MemoryType
       scores?: { importance: number; scopeScore?: number }
+      useLLMExtraction?: boolean
     }
   ) => {
-    const res = await apiClient.post('/memories/capture', { content, ...options })
+    // 确保对话内容使用 LLM 提取
+    const useLLM = options?.useLLMExtraction ?? true
+    const res = await apiClient.post('/memories/capture', { content, ...options, useLLMExtraction: useLLM })
     return res.data
   },
 

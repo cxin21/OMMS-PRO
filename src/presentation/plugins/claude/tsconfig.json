@@ -8,8 +8,13 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
-    "rootDir": "./server",
-    "declaration": true
+    "rootDir": "../../..",
+    "declaration": true,
+    "baseUrl": "../../..",
+    "paths": {
+      "@shared/*": ["shared/*"],
+      "@core/*": ["core/*"]
+    }
   },
   "include": ["server/**/*"],
   "exclude": ["node_modules"]

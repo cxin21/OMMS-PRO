@@ -9,25 +9,36 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { TextFormatter } from './formatter';
 /**
- * 解析文件大小字符串（如 "10MB" -> 10485760）
+ * 解析文件大小字符串（如 "10MB" -> 10485760）或数字
+ * @param size - 大小字符串（如 "10MB"）或数字（字节数）
+ * @returns 字节数
  */
-function parseSize(sizeStr) {
-    const match = sizeStr.match(/^(\d+(?:\.\d+)?)(KB|MB|GB)?$/i);
-    if (!match) {
-        return 10 * 1024 * 1024; // 默认 10MB
+function parseSize(size) {
+    // 如果是数字，直接返回（假设已经是字节数）
+    if (typeof size === 'number') {
+        return size;
     }
-    const value = parseFloat(match[1]);
-    const unit = (match[2] || 'MB').toUpperCase();
-    switch (unit) {
-        case 'KB':
-            return value * 1024;
-        case 'MB':
-            return value * 1024 * 1024;
-        case 'GB':
-            return value * 1024 * 1024 * 1024;
-        default:
-            return value;
+    // 如果是字符串，解析大小
+    if (typeof size === 'string') {
+        const match = size.match(/^(\d+(?:\.\d+)?)(KB|MB|GB)?$/i);
+        if (!match) {
+            return 10 * 1024 * 1024; // 默认 10MB
+        }
+        const value = parseFloat(match[1]);
+        const unit = (match[2] || 'MB').toUpperCase();
+        switch (unit) {
+            case 'KB':
+                return value * 1024;
+            case 'MB':
+                return value * 1024 * 1024;
+            case 'GB':
+                return value * 1024 * 1024 * 1024;
+            default:
+                return value;
+        }
     }
+    // 默认 10MB
+    return 10 * 1024 * 1024;
 }
 /**
  * 解析路径中的 ~ 符号
@@ -101,7 +112,7 @@ export class FileTransport {
      */
     constructor(config) {
         this.filePath = resolvePath(config.filePath);
-        this.maxSize = config.maxSize ? parseSize(config.maxSize) : 10 * 1024 * 1024;
+        this.maxSize = parseSize(config.maxSize); // parseSize 现在处理 string | number | undefined
         this.maxFiles = config.maxFiles ?? 5;
         this.enableRotation = config.enableRotation ?? true;
         this.formatter = config.formatter || new TextFormatter(false);

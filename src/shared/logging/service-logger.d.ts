@@ -35,3 +35,18 @@ export declare function createServiceLogger(serviceName: string, overrides?: Par
  * @param filePath - 日志文件路径
  */
 export declare function registerServiceLogConfig(serviceName: string, filePath: string): void;
+/**
+ * 刷新服务日志配置
+ * 重新从 ConfigManager 读取 logging.services 配置
+ * 用于配置更新后刷新日志设置
+ *
+ * @returns 是否成功刷新
+ */
+export declare function refreshServiceLogConfigs(): boolean;
+/**
+ * 获取当前日志级别
+ * 动态获取当前配置，不使用缓存
+ *
+ * @returns 当前日志级别
+ */
+export declare function getCurrentLogLevel(): 'trace' | 'debug' | 'info' | 'warn' | 'error';

@@ -10,6 +10,7 @@ import { createFormatter } from './formatter';
  * 日志级别数值映射（用于比较）
  */
 const LEVEL_VALUES = {
+    trace: -1, // 最详细
     debug: 0,
     info: 1,
     warn: 2,
@@ -53,7 +54,7 @@ export class Logger {
     createInitialStats() {
         return {
             totalEntries: 0,
-            byLevel: { debug: 0, info: 0, warn: 0, error: 0 },
+            byLevel: { trace: 0, debug: 0, info: 0, warn: 0, error: 0 },
             byModule: {},
             fileWrites: 0,
             consoleWrites: 0,
@@ -72,10 +73,14 @@ export class Logger {
         // 文件传输
         if (this.config.enableFile || this.config.output === 'file' || this.config.output === 'both') {
             if (this.config.filePath) {
+                // 支持 maxSize (number) 和 maxFileSize (string) 两种配置
+                // maxSize 来自 config.default.json (如 10485760)
+                // maxFileSize 来自 LoggingConfig (如 "50MB")
+                const maxSize = this.config.maxSize ?? this.config.maxFileSize;
                 transports.push(new FileTransport({
                     filePath: this.config.filePath,
-                    maxSize: this.config.maxFileSize,
-                    maxFiles: this.config.maxFiles,
+                    maxSize: maxSize,
+                    maxFiles: this.config.maxFiles ?? this.config.rotationCount,
                     enableRotation: this.config.enableRotation,
                     formatter: this.formatter,
                 }));
@@ -163,6 +168,11 @@ export class Logger {
      */
     setContext(context) {
         this.context = { ...this.context, ...context };
+        for (const transport of this.transports) {
+            if ('setContext' in transport && typeof transport.setContext === 'function') {
+                transport.setContext(context);
+            }
+        }
     }
     /**
      * 清除上下文
@@ -178,22 +188,13 @@ export class Logger {
     }
     /**
      * 内部日志方法
-     *
-     * @param level - 日志级别
-     * @param message - 日志消息
-     * @param error - 错误对象
-     * @param data - 附加数据
      */
     log(level, message, error, data) {
-        // 检查日志级别
         if (!this.shouldLog(level)) {
             return;
         }
-        // 创建日志条目
         const entry = this.createEntry(level, message, error, data);
-        // 写入传输
         this.writeToTransports(entry);
-        // 更新统计
         this.updateStats(level);
     }
     /**
@@ -227,7 +228,8 @@ export class Logger {
                 transport.write(entry);
             }
             catch (error) {
-                console.error('Error writing to transport:', error);
+                const msg = `[@omms/logger] Error writing to transport: ${error instanceof Error ? error.message : String(error)}\n`;
+                process.stderr.write(msg);
             }
         }
     }
@@ -251,29 +253,43 @@ export class Logger {
         }
     }
     /**
-     * 开始计时，返回结束函数
-     * 调用结束函数时自动记录操作耗时
+     * 开始计时，返回计时器对象
+     * 调用 end() 时自动记录操作耗时，调用 error() 记录错误
      *
      * @param operation - 操作名称
      * @param data - 附加数据
-     * @returns 结束计时的函数
+     * @returns 计时器对象，包含 end() 和 error() 方法
      *
      * @example
      * ```typescript
-     * const endTimer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
-     * // ... 执行操作 ...
-     * endTimer(); // 自动记录: "Operation completed: llm.extractMemories" + durationMs
+     * const timer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
+     * try {
+     *   // ... 执行操作 ...
+     *   timer.end();
+     * } catch (error) {
+     *   timer.error(error as Error);
+     * }
      * ```
      */
     startTimer(operation, data) {
         const start = performance.now();
-        return () => {
-            const durationMs = Math.round(performance.now() - start);
-            this.info(`Operation completed: ${operation}`, {
-                ...data,
-                operation,
-                durationMs,
-            });
+        return {
+            end: () => {
+                const durationMs = Math.round(performance.now() - start);
+                this.info(`Operation completed: ${operation}`, {
+                    ...data,
+                    operation,
+                    durationMs,
+                });
+            },
+            error: (err) => {
+                const durationMs = Math.round(performance.now() - start);
+                this.error(`Operation failed: ${operation}`, err, {
+                    ...data,
+                    operation,
+                    durationMs,
+                });
+            },
         };
     }
 }

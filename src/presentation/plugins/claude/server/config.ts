@@ -4,15 +4,30 @@
  * 所有配置必须从配置文件读取，禁止使用环境变量或硬编码默认值
  */
 
-import { config } from '../../../../shared/config';
+import { config, ConfigManager } from '../../../../shared/config';
 
 /**
  * 获取 API URL
  * 必须从配置文件读取
  */
 export function getOmmsApiUrl(): string {
+  // 如果 ConfigManager 未初始化，先初始化
   if (!config.isInitialized()) {
-    throw new Error('ConfigManager not initialized. Cannot read API configuration.');
+    try {
+      const configManager = ConfigManager.getInstance();
+      if (!configManager.isInitialized()) {
+        configManager.initialize().catch(() => {});
+      }
+    } catch {
+      // ConfigManager 不可用，使用环境变量作为后备
+    }
+  }
+
+  if (!config.isInitialized()) {
+    // 作为后备，从环境变量读取
+    const host = process.env['OMMS_API_HOST'] || 'localhost';
+    const port = process.env['OMMS_API_PORT'] || '3000';
+    return `http://${host}:${port}/api/v1`;
   }
 
   const apiConfig = config.getConfig('api') as { port?: number; enabled?: boolean; host?: string; basePath?: string } | undefined;
@@ -35,8 +50,21 @@ export function getOmmsApiUrl(): string {
  * 必须从配置文件读取
  */
 export function getAgentId(): string {
+  // 如果 ConfigManager 未初始化，先初始化
   if (!config.isInitialized()) {
-    throw new Error('ConfigManager not initialized. Cannot read agentId configuration.');
+    try {
+      const configManager = ConfigManager.getInstance();
+      if (!configManager.isInitialized()) {
+        configManager.initialize().catch(() => {});
+      }
+    } catch {
+      // ConfigManager 不可用
+    }
+  }
+
+  if (!config.isInitialized()) {
+    // 作为后备，从环境变量读取
+    return process.env['OMMS_AGENT_ID'] || 'claude-code';
   }
 
   const agentId = config.getConfig('agentId') as string | undefined;

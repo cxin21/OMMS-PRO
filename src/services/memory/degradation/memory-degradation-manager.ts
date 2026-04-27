@@ -484,8 +484,17 @@ export class MemoryDegradationManager {
     // 保护系数在计算遗忘分数时起作用
     const aaakProtection = extractAAAKProtection(memory.tags);
 
-    // 已经在归档状态，只检查是否应该删除（仍受 AAAK 保护约束）
+    // 已经在归档状态，检查保护等级和 AAAK 双重保护
     if (this.isArchived(memory)) {
+      // 归档记忆仍受 protectLevel 保护（重要性 >= 7 的记忆永不删除）
+      if (memory.importanceScore >= this.config.protectLevel) {
+        this.logger.debug('Archived memory protected by importance threshold', {
+          uid: memory.uid,
+          importanceScore: memory.importanceScore,
+          protectLevel: this.config.protectLevel,
+        });
+        return 'keep';
+      }
       // 归档记忆仍受 AAAK 保护
       const forgetScore = this.calculateForgetScore(memory, aaakProtection);
       if (forgetScore < this.config.deleteThreshold) {
@@ -726,6 +735,7 @@ export class MemoryDegradationManager {
    * - Profile 类型（IDENTITY/PREFERENCE/PERSONA）不自动变更作用域
    * - 归档记忆不参与作用域变更评估
    * - GLOBAL 作用域记忆在超长时间未访问后会降级到 AGENT
+   * - 实际阈值从 memoryService.store.scopeUpgradeThresholds 读取
    */
   private evaluateScopeChange(memory: MemoryMetaRecord): 'keep' | 'downgrade' | 'upgrade' {
     // Profile 类型不自动变更作用域

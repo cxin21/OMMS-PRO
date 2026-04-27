@@ -8,12 +8,11 @@
  */
 
 // ========== 导入模块（用于内部类）==========
-import { ConfigManager, config } from './shared/config';
+import { ConfigManager } from './shared/config';
 import { ProfileManager } from './services/profile/profile-manager';
 import { MemoryService } from './services/memory/index';
 import { createLogger } from './shared/logging/context';
 import type { ILogger } from './shared/logging/types';
-import type { OMMSConfig } from './core/types/config';
 import { CryptoUtils } from './shared/utils';
 import { EmbeddingService } from './shared/embedding/embedding-service';
 import { DreamingManager } from './services/dreaming/dreaming-manager';
@@ -72,7 +71,6 @@ export type {
 
 // Export types from config
 export type {
-  OMMSConfig,
   LoggingConfig,
   EmbeddingConfig,
   MemoryServiceConfig,
@@ -167,7 +165,7 @@ export class OMMS {
   private embeddingService!: EmbeddingService;
   private embeddingConfig!: { model: string; dimensions: number; baseURL?: string; apiKey?: string; batchSize?: number; timeout?: number };
 
-  constructor(options?: OMMSOptions) {
+  constructor() {
     this.logger = createLogger('OMMS', { module: 'main' });
 
     // 仅获取 ConfigManager 单例引用，不在构造函数中创建任何依赖 ConfigManager 的服务
@@ -267,7 +265,9 @@ export class OMMS {
     // 8. 初始化 LLM Extractor（用于生成摘要和评分）
     try {
       const llmConfig = this.configManager.getConfig('memoryService.capture') as Partial<MemoryCaptureConfig> | undefined;
+      console.log('[OMMS] LLM Extractor init - llmConfig:', llmConfig, 'llmProvider:', llmConfig?.llmProvider);
       if (llmConfig && llmConfig.llmProvider) {
+        console.log('[OMMS] Creating LLM Extractor with provider:', llmConfig.llmProvider);
         const extractor = createLLMExtractor({
           maxMemoriesPerCapture: llmConfig.maxMemoriesPerCapture ?? 5,
           similarityThreshold: llmConfig.similarityThreshold ?? 0.9,
@@ -285,6 +285,7 @@ export class OMMS {
         this.memoryService.setLLMExtractor(extractor);
         this.dreamingManager.setLLMExtractor(extractor);
         this.profileManager.setLLMExtractor(extractor);
+        console.log('[OMMS] setLLMExtractor completed, checking storeManager.getLLMExtractor():', this.memoryService.getStoreManager().getLLMExtractor() ? 'defined' : 'UNDEFINED');
         this.logger.info('[OMMS] LLM Extractor initialized', { provider: llmConfig.llmProvider });
       } else {
         this.logger.warn('[OMMS] No LLM provider configured, summary generation will use fallback truncation');
@@ -297,21 +298,28 @@ export class OMMS {
     try {
       const versionManager = this.memoryService.getStoreManager().getVersionManager();
       const storeManager = this.memoryService.getStoreManager();
+      const llmExtractor = storeManager.getLLMExtractor();
       const llmConfig = this.configManager.getConfig('memoryService.capture') as Partial<MemoryCaptureConfig> | undefined;
 
-      this.captureService = new MemoryCaptureService(
-        versionManager,
-        storeManager,
-        this.memoryService.getStoreManager().getLLMExtractor()!,
-        llmConfig
-      );
+      console.log('[OMMS] Creating MemoryCaptureService - llmExtractor:', llmExtractor ? 'available' : 'UNDEFINED');
 
-      // 设置 ProfileManager 用于自动用户画像分析
-      if (this.profileManager) {
-        this.captureService.setProfileManager(this.profileManager);
+      if (!llmExtractor) {
+        this.logger.warn('[OMMS] Cannot create MemoryCaptureService - llmExtractor is undefined');
+      } else {
+        this.captureService = new MemoryCaptureService(
+          versionManager,
+          storeManager,
+          llmExtractor,
+          llmConfig
+        );
+
+        // 设置 ProfileManager 用于自动用户画像分析
+        if (this.profileManager) {
+          this.captureService.setProfileManager(this.profileManager);
+        }
+
+        this.logger.info('[OMMS] MemoryCaptureService initialized');
       }
-
-      this.logger.info('[OMMS] MemoryCaptureService initialized');
     } catch (error) {
       this.logger.warn('[OMMS] Failed to initialize MemoryCaptureService', { error: String(error) });
     }
@@ -365,7 +373,7 @@ export class OMMS {
 export default OMMS;
 
 // ========== 开发模式启动 ==========
-// 当直接运行 src/index.ts 时，启动完整的 OMMS 系统
+// 当直接运行 src/index.ts 时，使用 OMMS 类启动完整的 OMMS 系统
 async function startServer(): Promise<void> {
   const logger = createLogger('OMMS', { module: 'main' });
   logger.info('Starting OMMS-PRO server...');
@@ -374,146 +382,18 @@ async function startServer(): Promise<void> {
   const express = await import('express');
   const app = express.default();
 
-  // 配置加载（必须最先执行，确保配置系统就绪）
-  const configManager = ConfigManager.getInstance();
-  await configManager.initialize();
-
-  // 从配置读取缓存配置
-  const cacheConfig = configManager.getConfig('memoryService.cache') as { maxSize?: number; ttl?: number } | undefined;
-  const cacheMaxSize = cacheConfig?.maxSize ?? 1000;
-  const cacheTtl = cacheConfig?.ttl ?? 3600000;
-  const cacheManager = new CacheManager({ maxSize: cacheMaxSize, ttl: cacheTtl });
-  const metaStore = new SQLiteMetaStore();
-  const palaceStore = new PalaceStore();
-  const graphStore = new GraphStore();
-
-  // Embedding 服务配置
-  const embeddingService = new EmbeddingService();
-  embeddingService.updateConfig({});
-  const embeddingConfig = embeddingService.getConfig();
-
-  // VectorStore 使用 embedding 配置的维度
-  const vectorStore = new VectorStore({ dimensions: embeddingConfig.dimensions });
-  await vectorStore.initialize();
-  await metaStore.initialize();
-  await palaceStore.initialize();
-  await graphStore.initialize();
-
-  // Embedding 服务
-  const embedder = async (text: string): Promise<number[]> => {
-    try {
-      return await embeddingService.embed(text);
-    } catch (error) {
-      logger.warn('Embedding failed, using fallback', { error: String(error) });
-      const hash = CryptoUtils.hash(text);
-      return new Array(embeddingConfig.dimensions).fill(0).map((_, i) => hash.charCodeAt(i % hash.length) / 255);
-    }
-  };
-
-  // 初始化 Agent 系统（用于 LLM 上下文注入）
-  // 从配置读取 agentsDir，如果未配置则使用默认值 './agents'
-  const agentConfig = config.getConfig('agents') as { agentsDir?: string } | undefined;
-  const agentContextProvider = new AgentContextProvider({
-    agentsDir: agentConfig?.agentsDir ?? './agents',
-    enabled: true,
-    preload: true,
-    logger,
-  });
-  await agentContextProvider.preloadAgents();
-  logger.info('Agent system initialized', { agentCount: agentContextProvider.getRegistry().getAgentCount() });
-
-  // 记忆服务
-  const memoryService = new MemoryService(
-    { cache: cacheManager, vectorStore, metaStore, palaceStore, graphStore },
-    embedder,
-    undefined,
-    { enableCache: true, enableVector: true, enableGraph: true }
-  );
-
-  // 画像管理器（注入 MemoryService 用于存储 PERSONA/PREFERENCE 记忆）
-  const profileManager = new ProfileManager({ memoryService });
-
-  // Dreaming 管理器
-  const dreamingManager = new DreamingManager(memoryService, graphStore, palaceStore, metaStore, vectorStore);
-  await dreamingManager.initialize();
-
-  // LLM Extractor - 使用 llmExtraction 配置
-  try {
-    const llmConfig = configManager.getConfig('llmExtraction') as {
-      provider?: string;
-      model?: string;
-      apiKey?: string;
-      baseURL?: string;
-    } | undefined;
-
-    if (llmConfig?.provider && llmConfig?.apiKey && llmConfig?.baseURL) {
-      const provider = llmConfig.provider === 'openai-compatible' ? 'custom' : llmConfig.provider as 'anthropic' | 'openai' | 'custom';
-      logger.debug('About to call createLLMExtractor', { provider });
-      const extractor = createLLMExtractor({
-        maxMemoriesPerCapture: 5,
-        similarityThreshold: 0.9,
-        confidenceThreshold: 0.5,
-        enableLLMSummarization: true,
-        llmProvider: provider,
-        llmApiKey: llmConfig.apiKey,
-        llmEndpoint: llmConfig.baseURL,
-        llmModel: llmConfig.model,
-      });
-      // 设置 Agent 上下文提供器
-      extractor.setAgentContextProvider(agentContextProvider);
-      logger.debug('LLM Extractor created, calling setLLMExtractor');
-      try {
-        memoryService.setLLMExtractor(extractor);
-        dreamingManager.setLLMExtractor(extractor);
-        profileManager.setLLMExtractor(extractor);
-        logger.debug('setLLMExtractor completed');
-        logger.info('LLM Extractor initialized', { provider: llmConfig.provider, model: llmConfig.model });
-      } catch (e) {
-        logger.error('setLLMExtractor failed', e instanceof Error ? e : new Error(String(e)));
-      }
-    } else {
-      logger.debug('LLM not configured', { provider: llmConfig?.provider, hasApiKey: !!llmConfig?.apiKey, hasBaseURL: !!llmConfig?.baseURL });
-      logger.warn('LLM Extractor not configured - missing provider, apiKey or baseURL');
-    }
-  } catch (error) {
-    logger.error('Failed to initialize LLM Extractor', error instanceof Error ? error : new Error(String(error)));
-    logger.warn('Failed to initialize LLM Extractor', { error: String(error) });
-  }
-
-  // MemoryCaptureService - 用于 LLM 智能提取对话记忆
-  let captureService: MemoryCaptureService | undefined;
-  try {
-    const storeManager = memoryService.getStoreManager();
-    const versionManager = storeManager.getVersionManager();
-    const llmExtractor = storeManager.getLLMExtractor();
-    const captureConfig = configManager.getConfig('memoryService.capture') as Partial<MemoryCaptureConfig> | undefined;
-
-    if (llmExtractor) {
-      captureService = new MemoryCaptureService(
-        versionManager,
-        storeManager,
-        llmExtractor,
-        captureConfig
-      );
-      // 设置 ProfileManager 用于自动用户画像分析
-      captureService.setProfileManager(profileManager);
-      logger.info('[startServer] MemoryCaptureService initialized');
-    } else {
-      logger.warn('[startServer] LLM Extractor not available for MemoryCaptureService');
-    }
-  } catch (error) {
-    logger.error('Failed to initialize MemoryCaptureService', error instanceof Error ? error : new Error(String(error)));
-    logger.warn('[startServer] Failed to initialize MemoryCaptureService', { error: String(error) });
-  }
+  // 使用 OMMS 类进行初始化（与 UnifiedServer 一致）
+  const omms = new OMMS();
+  await omms.initialize();
 
   // 创建并启动 API 服务器（挂载到 /api，与 UnifiedServer 保持一致）
   const apiServer = createRESTAPIServer({
     deps: {
-      memoryService,
-      captureService,
-      profileManager,
-      dreamingManager,
-      graphStore,
+      memoryService: omms.memoryService,
+      captureService: omms.captureService,
+      profileManager: omms.profileManager,
+      dreamingManager: omms.dreamingManager,
+      graphStore: omms.graphStore,
     },
   });
 
@@ -536,7 +416,7 @@ async function startServer(): Promise<void> {
   const server = http.createServer(app);
 
   // 从配置读取 API 服务器地址
-  const apiConfig = configManager.getConfig('api') as { port?: number; host?: string } | undefined;
+  const apiConfig = omms.configManager.getConfig('api') as { port?: number; host?: string } | undefined;
   const port = apiConfig?.port ?? 3000;
   const host = apiConfig?.host ?? '0.0.0.0';
 

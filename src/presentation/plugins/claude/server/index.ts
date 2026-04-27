@@ -14,16 +14,32 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { getConversationTools } from './tools/conversation.js';
 import { getOmmsApiUrl, getAgentId, apiFetch } from './config';
+import { ConfigManager } from '../../../../shared/config';
+
+// Initialize ConfigManager before starting the plugin
+// Claude Code 启动插件时，OMMS 后端可能尚未初始化
+let configInitialized = false;
+try {
+  const configManager = ConfigManager.getInstance();
+  if (!configManager.isInitialized()) {
+    configManager.initialize().catch(() => {
+      // ConfigManager 初始化失败不影响插件启动
+    });
+  }
+  configInitialized = true;
+} catch {
+  // ConfigManager 不可用
+}
 
 const logger = {
   info: (msg: string, data?: Record<string, unknown>) => {
-    console.log(`[info] omms-plugin: ${msg}`, data || '');
+    writeLog('info', msg, data);
   },
   error: (msg: string, data?: Record<string, unknown>) => {
-    console.error(`[error] omms-plugin: ${msg}`, data || '');
+    writeLog('error', msg, data);
   },
   warn: (msg: string, data?: Record<string, unknown>) => {
-    console.warn(`[warn] omms-plugin: ${msg}`, data || '');
+    writeLog('warn', msg, data);
   },
 };
 
@@ -280,15 +296,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const result = await ommsApi('/memories/capture', {
-          method: 'POST',
-          body: JSON.stringify({
-            content,
-            agentId: getAgentId(),
-            sessionId: sessionId || `session-${Date.now()}`,
-            type,
-            scores: { importance, scopeScore: importance },
-          }),
-        });
+        method: 'POST',
+        body: JSON.stringify({
+          content,
+          agentId: getAgentId(),
+          sessionId: sessionId || `session-${Date.now()}`,
+          type,
+          scores: { importance, scopeScore: importance },
+          useLLMExtraction: true,  // Claude plugin 捕获的内容需要 LLM 提取
+        }),
+      });
 
         if (!result.success) {
           return {

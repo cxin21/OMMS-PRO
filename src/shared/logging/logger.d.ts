@@ -66,7 +66,7 @@ export declare class Logger implements ILogger {
      * @param context - 子日志器的上下文
      * @returns 新的日志器实例
      */
-    child(module: string, context?: LogContext): Logger;
+    child(module: string, context?: LogContext): ILogger;
     /**
      * 设置上下文
      */
@@ -81,11 +81,6 @@ export declare class Logger implements ILogger {
     getStats(): LogStats;
     /**
      * 内部日志方法
-     *
-     * @param level - 日志级别
-     * @param message - 日志消息
-     * @param error - 错误对象
-     * @param data - 附加数据
      */
     protected log(level: LogLevel, message: string, error?: Error, data?: Record<string, unknown>): void;
     /**
@@ -109,21 +104,28 @@ export declare class Logger implements ILogger {
      */
     close(): void;
     /**
-     * 开始计时，返回结束函数
-     * 调用结束函数时自动记录操作耗时
+     * 开始计时，返回计时器对象
+     * 调用 end() 时自动记录操作耗时，调用 error() 记录错误
      *
      * @param operation - 操作名称
      * @param data - 附加数据
-     * @returns 结束计时的函数
+     * @returns 计时器对象，包含 end() 和 error() 方法
      *
      * @example
      * ```typescript
-     * const endTimer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
-     * // ... 执行操作 ...
-     * endTimer(); // 自动记录: "Operation completed: llm.extractMemories" + durationMs
+     * const timer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
+     * try {
+     *   // ... 执行操作 ...
+     *   timer.end();
+     * } catch (error) {
+     *   timer.error(error as Error);
+     * }
      * ```
      */
-    startTimer(operation: string, data?: Record<string, unknown>): () => void;
+    startTimer(operation: string, data?: Record<string, unknown>): {
+        end: () => void;
+        error: (err: Error) => void;
+    };
 }
 /**
  * 异步日志器（支持队列缓冲）

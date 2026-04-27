@@ -814,6 +814,7 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
               agentId,
               sessionId,
               type: 'event',
+              useLLMExtraction: true,  // 明确启用 LLM 提取
               metadata: {
                 source: 'omms_capture_session_tool',
                 captureMode: 'full_conversation',

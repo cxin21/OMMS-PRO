@@ -7,12 +7,13 @@
 /**
  * 日志级别枚举
  *
+ * trace - 最详细日志，用于追踪代码执行路径
  * debug - 调试信息，最详细的日志
  * info  - 一般信息，记录正常运行状态
  * warn  - 警告信息，需要注意但不影响运行
  * error - 错误信息，需要立即处理
  */
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 /**
  * 日志输出目标
  *
@@ -86,7 +87,9 @@ export interface LoggingConfig {
     output: LogOutput;
     /** 日志文件路径 */
     filePath?: string;
-    /** 单个日志文件最大大小（如 "10MB"） */
+    /** 单个日志文件最大大小（字节数），来自 config.default.json */
+    maxSize?: number;
+    /** 单个日志文件最大大小（字符串格式），来自 LoggingConfig 类型 */
     maxFileSize?: string;
     /** 保留的日志文件最大数量 */
     maxFiles?: number;
@@ -98,9 +101,9 @@ export interface LoggingConfig {
     enableFile: boolean;
     /** 是否启用日志轮转 */
     enableRotation: boolean;
-    /** 轮转大小 */
+    /** 轮转大小（已废弃，使用 maxSize 或 maxFileSize） */
     rotationSize?: string;
-    /** 轮转文件保留数量 */
+    /** 轮转文件保留数量（已废弃，使用 maxFiles） */
     rotationCount?: number;
     /** 是否在控制台使用颜色 */
     useColors?: boolean;
@@ -167,7 +170,10 @@ export interface ILogger {
      * @param data - 附加数据
      * @returns 计时器对象，包含 end() 和 error() 方法
      */
-    startTimer(operation: string, data?: Record<string, unknown>): { end: () => void; error: (err: Error) => void };
+    startTimer(operation: string, data?: Record<string, unknown>): {
+        end: () => void;
+        error: (err: Error) => void;
+    };
 }
 /**
  * 日志传输接口

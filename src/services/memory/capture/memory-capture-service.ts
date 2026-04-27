@@ -97,12 +97,13 @@ export class MemoryCaptureService {
     // 生成实例唯一标识
     this.instanceId = `capture-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-    // 初始化分布式锁管理器（延迟初始化，从配置读取 dbPath）
-    this.initializeDistributedLockManager();
-
+    // 先创建 logger，再初始化分布式锁管理器
     this.logger = createServiceLogger('MemoryCaptureService');
     this.inclusionDetector = new MemoryInclusionDetector();
     this.incrementalCaptureManager = new IncrementalCaptureManager();
+
+    // 初始化分布式锁管理器（延迟初始化，从配置读取 dbPath）
+    this.initializeDistributedLockManager();
 
     // 使用 wrapWithErrorBoundary 包装 capture 方法
     this.capture = wrapWithErrorBoundary(this.logger, 'MemoryCaptureService.capture', this.capture.bind(this)) as any;
@@ -240,6 +241,8 @@ export class MemoryCaptureService {
         reason: 'duplicate',
         details: `reused existing memory: ${existingMemoryUid}`,
       });
+      // 即使是重复内容，也需要更新光标以避免后续相同 timestamp 的输入被重复处理
+      this.incrementalCaptureManager.markProcessed(input, existingMemoryUid);
       return result;
     }
 
@@ -257,7 +260,7 @@ export class MemoryCaptureService {
       maxCount: this.config.maxMemoriesPerCapture,
       typeHints: this.getDefaultTypes(),
     });
-    this.logger.info('LLM extraction complete', { count: extracted.length });
+    this.logger.error('LLM extraction complete', { count: extracted.length, extracted: extracted });
 
     // 2. 置信度过滤
     const qualified = this.filterByConfidence(extracted, result.skipped);

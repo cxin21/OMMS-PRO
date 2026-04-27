@@ -5,10 +5,12 @@
  * @module logging/formatter
  */
 import { TimeUtils } from '../utils/time';
+import { sanitizeData } from './sanitizer';
 /**
  * 日志级别颜色映射（用于控制台输出）
  */
 const LEVEL_COLORS = {
+    trace: '\x1b[90m', // 灰色
     debug: '\x1b[36m', // 青色
     info: '\x1b[32m', // 绿色
     warn: '\x1b[33m', // 黄色
@@ -75,6 +77,10 @@ export class JsonFormatter {
             const result = {};
             for (const [key, value] of Object.entries(data)) {
                 result[key] = this.sanitize(value);
+            }
+            // 脱敏敏感数据（apikey, password, token 等字段）
+            if (!Array.isArray(data)) {
+                return sanitizeData(result);
             }
             return result;
         }

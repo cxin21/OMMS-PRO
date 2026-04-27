@@ -49,7 +49,7 @@ export declare class FileTransport implements ILogTransport {
      */
     constructor(config: {
         filePath: string;
-        maxSize?: string;
+        maxSize?: string | number;
         maxFiles?: number;
         enableRotation?: boolean;
         formatter?: ILogFormatter;
@@ -113,7 +113,7 @@ export declare class MultiTransport implements ILogTransport {
  */
 export declare function createTransport(type: 'console' | 'file' | 'multi', config?: {
     filePath?: string;
-    maxSize?: string;
+    maxSize?: string | number;
     maxFiles?: number;
     useColors?: boolean;
     enableRotation?: boolean;
