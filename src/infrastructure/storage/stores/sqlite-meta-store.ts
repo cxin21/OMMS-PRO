@@ -135,10 +135,15 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       // 注意: runMigrations() 也会在每次 ensureInitialized() 后执行，
       // 此处提前运行是为了兼容全新数据库的首次初始化路径
       try {
-        this.db.exec(`ALTER TABLE memory_meta ADD COLUMN usedByAgents TEXT NOT NULL DEFAULT '[]'`);
-        this.logger.info('Migrated memory_meta: added usedByAgents column');
+        // 先检查列是否已存在，避免重复添加
+        const tableInfo = this.db.exec("PRAGMA table_info(memory_meta)");
+        const columns = tableInfo[0]?.values?.map((row: any) => row[1]) || [];
+        if (!columns.includes('usedByAgents')) {
+          this.db.exec(`ALTER TABLE memory_meta ADD COLUMN usedByAgents TEXT NOT NULL DEFAULT '[]'`);
+          this.logger.info('Migrated memory_meta: added usedByAgents column');
+        }
       } catch {
-        // 列已存在，忽略
+        // 列已存在或迁移失败，忽略
       }
 
       // Create memory_versions table for efficient version queries (v2.2.0)

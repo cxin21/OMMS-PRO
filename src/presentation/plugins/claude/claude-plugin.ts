@@ -85,12 +85,8 @@ export class ClaudePlugin implements IPlugin {
         agentId: agentId ?? 'claude-code',
       };
     } catch {
-      return {
-        rootDir: './plugins',
-        mcpPort: 3000,
-        apiUrl: 'http://localhost:3000/api/v1',
-        agentId: 'claude-code',
-      };
+      // 配置不可用时抛出错误，禁止使用硬编码 fallback
+      throw new Error('ConfigManager not initialized and no plugins/agentId/api config available');
     }
   }
 

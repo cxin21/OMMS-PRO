@@ -24,7 +24,8 @@ function getDefaultAgentId(): string {
       if (apiConfig?.agentId) return apiConfig.agentId;
     }
   } catch { /* ignore */ }
-  return 'default-agent';
+  // 配置不可用时抛出错误，禁止使用硬编码 fallback
+  throw new Error('ConfigManager not initialized and no agentId configured');
 }
 
 /**
@@ -33,11 +34,19 @@ function getDefaultAgentId(): string {
 function getDefaultSessionId(): string {
   try {
     if (config.isInitialized()) {
-      const sessionConfig = config.getConfig('session') as any;
+      // 尝试从 memoryService.session 获取
+      const sessionConfig = config.getConfig('memoryService.session') as any;
       if (sessionConfig?.defaultSessionId) return sessionConfig.defaultSessionId;
+      // 尝试从 memoryService.agentId 生成会话ID（使用 agentId 作为前缀）
+      const agentId = config.getConfig('memoryService.agentId') as string | undefined;
+      if (agentId) return `session-${agentId}-${Date.now()}`;
+      // 尝试从顶层 agentId 生成
+      const topAgentId = config.getConfig('agentId') as string | undefined;
+      if (topAgentId) return `session-${topAgentId}-${Date.now()}`;
     }
   } catch { /* ignore */ }
-  return 'default-session';
+  // 配置不可用时生成基于时间戳的会话ID
+  return `session-${Date.now()}`;
 }
 
 /**

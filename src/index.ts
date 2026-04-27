@@ -374,27 +374,18 @@ async function startServer(): Promise<void> {
   const express = await import('express');
   const app = express.default();
 
-  // 创建存储实例（从配置读取，若配置未初始化则使用默认值）
-  let cacheMaxSize = 1000;
-  let cacheTtl = 3600000;
-  try {
-    const configMgr = ConfigManager.getInstance();
-    if (configMgr.isInitialized()) {
-      const cacheConfig = configMgr.getConfig('memoryService.cache') as { maxSize?: number; ttl?: number } | undefined;
-      if (cacheConfig) {
-        cacheMaxSize = cacheConfig.maxSize ?? cacheMaxSize;
-        cacheTtl = cacheConfig.ttl ?? cacheTtl;
-      }
-    }
-  } catch { }
+  // 配置加载（必须最先执行，确保配置系统就绪）
+  const configManager = ConfigManager.getInstance();
+  await configManager.initialize();
+
+  // 从配置读取缓存配置
+  const cacheConfig = configManager.getConfig('memoryService.cache') as { maxSize?: number; ttl?: number } | undefined;
+  const cacheMaxSize = cacheConfig?.maxSize ?? 1000;
+  const cacheTtl = cacheConfig?.ttl ?? 3600000;
   const cacheManager = new CacheManager({ maxSize: cacheMaxSize, ttl: cacheTtl });
   const metaStore = new SQLiteMetaStore();
   const palaceStore = new PalaceStore();
   const graphStore = new GraphStore();
-
-  // 配置加载（必须在 VectorStore 初始化之前，确保 dimensions 正确）
-  const configManager = ConfigManager.getInstance();
-  await configManager.initialize();
 
   // Embedding 服务配置
   const embeddingService = new EmbeddingService();
@@ -543,10 +534,16 @@ async function startServer(): Promise<void> {
   // 启动 HTTP 服务器
   const http = await import('http');
   const server = http.createServer(app);
+
+  // 从配置读取 API 服务器地址
+  const apiConfig = configManager.getConfig('api') as { port?: number; host?: string } | undefined;
+  const port = apiConfig?.port ?? 3000;
+  const host = apiConfig?.host ?? '0.0.0.0';
+
   await new Promise<void>((resolve, reject) => {
-    server.listen(3000, '0.0.0.0', () => {
+    server.listen(port, host, () => {
       logger.info('OMMS-PRO server started successfully');
-      logger.info('API available at http://localhost:3000/api/v1');
+      logger.info(`API available at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/v1`);
       resolve();
     });
     server.on('error', reject);

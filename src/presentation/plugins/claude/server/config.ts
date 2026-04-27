@@ -7,9 +7,9 @@
 import { config } from '../../../../shared/config';
 
 // 默认值（仅在配置系统未初始化时使用）
+// 注意：这些默认值仅在 ConfigManager 未初始化时使用，配置系统就绪后必须从配置读取
 const DEFAULT_API_PORT = '3000';
 const DEFAULT_API_PATH = '/api/v1';
-const DEFAULT_AGENT_ID = 'claude-code';
 const DEFAULT_SESSION_PREFIX = 'session-';
 const DEFAULT_PROJECT_DIR = './data/sessions';
 
@@ -50,7 +50,7 @@ export function getOmmsApiUrl(): string {
 
 /**
  * 获取 Agent ID
- * 优先从配置读取，其次环境变量，最后默认
+ * 优先从配置读取，其次环境变量
  */
 export function getAgentId(): string {
   if (config.isInitialized()) {
@@ -60,11 +60,17 @@ export function getAgentId(): string {
         return agentId;
       }
     } catch {
-      // 配置读取失败
+      // 配置读取失败，继续使用环境变量
     }
   }
 
-  return process.env['OMMS_AGENT_ID'] || DEFAULT_AGENT_ID;
+  const envAgentId = process.env['OMMS_AGENT_ID'];
+  if (envAgentId) {
+    return envAgentId;
+  }
+
+  // 配置不可用时抛出错误，禁止使用硬编码 fallback
+  throw new Error('ConfigManager not initialized and no OMMS_AGENT_ID environment variable');
 }
 
 /**

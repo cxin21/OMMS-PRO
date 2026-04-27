@@ -24,9 +24,21 @@ import type { MCPTool, ToolMetadata } from '../types';
 import type { StorageMemoryService } from '../../../services/memory/core/storage-memory-service';
 import { MemoryType, MemoryScope } from '../../../core/types/memory';
 import * as http from 'http';
+import { config } from '../../../shared/config';
 
 // 使用 enableConsole: true 确保日志输出到控制台
 const logger = createLogger('mcp-memory-tools', { enableConsole: true, level: 'debug' });
+
+/**
+ * 获取默认 agentId，从配置读取
+ */
+function getDefaultAgentId(): string {
+  if (config.isInitialized()) {
+    const agentId = config.getConfig('agentId') as string | undefined;
+    if (agentId) return agentId;
+  }
+  throw new Error('ConfigManager not initialized and no agentId configured');
+}
 
 export function createMemoryTools(memoryService: StorageMemoryService): Array<{ tool: MCPTool; metadata: ToolMetadata }> {
   return [
@@ -53,8 +65,8 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
                 content: params.content,
                 type: (params.type as MemoryType) ?? MemoryType.EVENT,
                 metadata: {
-                  agentId: params.agentId ?? 'default-agent',
-                  sessionId: params.sessionId ?? 'default-session',
+                  agentId: params.agentId ?? getDefaultAgentId(),
+                  sessionId: params.sessionId ?? `session-${Date.now()}`,
                   source: 'mcp',
                 },
               },
@@ -637,8 +649,8 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
             const path = await import('path');
 
             const sessionId = params.sessionId || process.env['OMMS_SESSION_ID'] || `session-${Date.now()}`;
-            const agentId = params.agentId || process.env['OMMS_AGENT_ID'] || 'claude-code';
-            const projectDir = params.projectDir || process.env['CLAUDE_PROJECT_DIR'] || '/tmp';
+            const agentId = params.agentId || process.env['OMMS_AGENT_ID'] || 'default-agent';
+            const projectDir = params.projectDir || process.env['CLAUDE_PROJECT_DIR'] || './data/sessions';
 
             // 创建目录
             const convLogDir = path.join(projectDir, '.claude', 'omms-conversation');
@@ -723,8 +735,8 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
             const path = await import('path');
 
             const sessionId = params.sessionId || process.env['OMMS_SESSION_ID'] || `session-${Date.now()}`;
-            const agentId = params.agentId || process.env['OMMS_AGENT_ID'] || 'claude-code';
-            const projectDir = params.projectDir || process.env['CLAUDE_PROJECT_DIR'] || '/tmp';
+            const agentId = params.agentId || process.env['OMMS_AGENT_ID'] || 'default-agent';
+            const projectDir = params.projectDir || process.env['CLAUDE_PROJECT_DIR'] || './data/sessions';
 
             const convLogDir = path.join(projectDir, '.claude', 'omms-conversation');
             const logFile = path.join(convLogDir, `${sessionId}.jsonl`);
@@ -827,7 +839,7 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
             // 从 ConfigManager 读取 API 服务器配置
             const { config: appConfig } = await import('../../../shared/config');
             const apiConfig = appConfig.getConfig<{ port?: number; host?: string }>('api');
-            const apiHost = apiConfig?.host || '0.0.0.0';
+            const apiHost = apiConfig?.host || 'localhost';
             const apiPort = apiConfig?.port ?? 3000;
 
             const captureResult: CaptureResult = await new Promise((resolve) => {
