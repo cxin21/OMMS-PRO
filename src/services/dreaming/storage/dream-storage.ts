@@ -9,7 +9,7 @@ import type { PhaseResult } from '../types';
 import Database from 'better-sqlite3';
 import { dirname } from 'node:path';
 import { FileUtils } from '../../../shared/utils/file';
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
 export interface IDreamStorage {
@@ -47,7 +47,7 @@ export class DreamStorage implements IDreamStorage {
   private readonly dbPath: string;
 
   constructor(userConfig?: { dbPath?: string }) {
-    this.logger = createLogger('DreamStorage', { module: 'dream-storage' });
+    this.logger = createServiceLogger('DreamStorage');
 
     // 从 ConfigManager 获取路径配置
     const storageConfig = config.getConfigOrThrow<{ dreamReportsDbPath: string }>('memoryService.storage');

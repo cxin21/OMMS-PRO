@@ -1,10 +1,11 @@
 /**
  * Preference Inferer - 偏好推断器
- * 
+ *
  * 基于用户行为和交互历史自动推断用户偏好
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
+import { config } from '../../../shared/config';
 import type {
   UserPreferences,
   InteractionPreferences,
@@ -14,6 +15,10 @@ import type {
   PreferenceSource,
   TopicPreference,
   ContentFormatPreference,
+  ContentFormat,
+  ResponseLengthPreference,
+  ResponseSpeedPreference,
+  ComplexityLevel,
 } from '../types';
 
 export interface PreferenceInfererOptions {
@@ -31,6 +36,13 @@ interface InferredPreferences {
   sources: PreferenceSource[];
 }
 
+// 默认配置
+const DEFAULT_PREFERENCE_INFERER_CONFIG: Required<PreferenceInfererOptions> = {
+  minInteractions: 10,
+  confidenceThreshold: 0.6,
+  decayFactor: 0.9,
+};
+
 /**
  * 偏好推断器类
  */
@@ -39,11 +51,26 @@ export class PreferenceInferer {
   private options: Required<PreferenceInfererOptions>;
 
   constructor(options?: PreferenceInfererOptions) {
-    this.logger = createLogger('preference-inferer');
+    this.logger = createServiceLogger('PreferenceInferer');
+
+    // 从 ConfigManager 读取配置
+    let managerConfig: Partial<PreferenceInfererOptions> = {};
+    if (config.isInitialized()) {
+      try {
+        const cfg = config.getConfig<PreferenceInfererOptions>('profileService.preferenceInferer');
+        if (cfg) {
+          managerConfig = cfg;
+        }
+      } catch {
+        // ConfigManager not available, will use defaults
+      }
+    }
+
+    // 合并: 默认值 -> ConfigManager -> 用户选项
     this.options = {
-      minInteractions: options?.minInteractions ?? 10,
-      confidenceThreshold: options?.confidenceThreshold ?? 0.6,
-      decayFactor: options?.decayFactor ?? 0.9,
+      minInteractions: options?.minInteractions ?? managerConfig.minInteractions ?? DEFAULT_PREFERENCE_INFERER_CONFIG.minInteractions,
+      confidenceThreshold: options?.confidenceThreshold ?? managerConfig.confidenceThreshold ?? DEFAULT_PREFERENCE_INFERER_CONFIG.confidenceThreshold,
+      decayFactor: options?.decayFactor ?? managerConfig.decayFactor ?? DEFAULT_PREFERENCE_INFERER_CONFIG.decayFactor,
     };
   }
 
@@ -227,13 +254,13 @@ export class PreferenceInferer {
     // 响应长度偏好
     if (patterns.responseLength.length > 0) {
       const mode = this.findMode(patterns.responseLength);
-      prefs.responseLength = mode as any;
+      prefs.responseLength = mode as ResponseLengthPreference;
     }
 
     // 响应速度偏好
     if (patterns.responseSpeed.length > 0) {
       const mode = this.findMode(patterns.responseSpeed);
-      prefs.responseSpeed = mode as any;
+      prefs.responseSpeed = mode as ResponseSpeedPreference;
     }
 
     // 活跃时间
@@ -276,7 +303,7 @@ export class PreferenceInferer {
         .sort((a, b) => b[1] - a[1]);
 
       prefs.formats = sortedFormats.map(([format, count]) => ({
-        format: format as any,
+        format: format as ContentFormat,
         preference: this.normalizeScore(count, patterns.formats),
       }));
     }
@@ -284,7 +311,7 @@ export class PreferenceInferer {
     // 复杂度级别
     if (patterns.complexityLevels.length > 0) {
       const mode = this.findMode(patterns.complexityLevels);
-      prefs.complexityLevel = mode as any;
+      prefs.complexityLevel = mode as ComplexityLevel;
     }
 
     return prefs;

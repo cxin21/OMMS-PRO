@@ -7,7 +7,7 @@
  * @module storage/room-manager
  */
 
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
@@ -87,7 +87,7 @@ export class RoomManager {
     embeddingService: (text: string) => Promise<number[]>,
     config?: Partial<RoomManagerConfig>
   ) {
-    this.logger = createLogger('RoomManager');
+    this.logger = createServiceLogger('RoomManager');
 
     // Load configuration from ConfigManager
     const fileConfig = this.loadConfig();

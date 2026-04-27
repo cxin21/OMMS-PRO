@@ -9,7 +9,7 @@
  * @module storage/dynamic-room-manager
  */
 
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
@@ -91,7 +91,7 @@ export class DynamicRoomManager {
     private embeddingService: (text: string) => Promise<number[]>,
     private config: DynamicRoomManagerConfig
   ) {
-    this.logger = createLogger('DynamicRoomManager');
+    this.logger = createServiceLogger('DynamicRoomManager');
   }
 
   /**

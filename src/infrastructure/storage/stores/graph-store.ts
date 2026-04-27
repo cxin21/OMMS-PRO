@@ -4,7 +4,7 @@
  */
 
 import type { IGraphStore, GraphNodeRecord, GraphEdgeRecord, RelatedMemoryResult } from '../core/types';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { StringUtils } from '../../../shared/utils/string';
 import { join, dirname } from 'path';
@@ -23,7 +23,7 @@ export class GraphStore implements IGraphStore {
 
   constructor(userConfig?: Partial<{ dbPath: string }>) {
     this.config = { dbPath: userConfig?.dbPath ?? '' };
-    this.logger = createLogger('GraphStore', { enabled: true });
+    this.logger = createServiceLogger('GraphStore');
     this.db = null;
     this.initialized = false;
   }

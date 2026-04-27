@@ -7,7 +7,7 @@
 
 import type { ExtractedMemory, MemoryCaptureConfig } from '../../../core/types/memory';
 import { MemoryType } from '../../../core/types/memory';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { JsonParser } from '../../../shared/utils/json-parser';
 import type { AgentRuntimeContext } from '../../../shared/agents';
@@ -35,8 +35,8 @@ export class ExtractorError extends Error {
 export interface LLMScoringResult {
   /** 重要性评分 (0-10) */
   importance: number;
-  /** 作用域评分 (0-10) */
-  scope: number;
+  /** 作用域评分 (0-10) - 统一命名 scopeScore */
+  scopeScore: number;
   /** 置信度 (0-1) */
   confidence: number;
   /** 评分理由 */
@@ -176,7 +176,7 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
   protected promptLoader = PromptLoader.getInstance();
 
   constructor(protected config: MemoryCaptureConfig) {
-    this.logger = createLogger(`LLMExtractor.${config.llmProvider}`);
+    this.logger = createServiceLogger('LLMExtractor');
   }
 
   /**
@@ -596,7 +596,7 @@ export class AnthropicExtractor extends BaseLLMExtractor {
     this.logger.info('generateScores completed', {
       contentLength: content.length,
       importance: result.importance,
-      scope: result.scope
+      scopeScore: result.scopeScore
     });
     return result;
   }
@@ -699,7 +699,7 @@ export class AnthropicExtractor extends BaseLLMExtractor {
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
-      scope: Math.max(0, Math.min(10, parsed.scope)),
+      scopeScore: Math.max(0, Math.min(10, parsed.scope)),
       confidence: Math.max(0, Math.min(1, parsed.confidence ?? 0.5)),
       reasoning: parsed.reasoning ?? '',
     };
@@ -977,7 +977,7 @@ export class OpenAIExtractor extends BaseLLMExtractor {
     this.logger.info('generateScores completed', {
       contentLength: content.length,
       importance: result.importance,
-      scope: result.scope
+      scopeScore: result.scopeScore
     });
     return result;
   }
@@ -1080,7 +1080,7 @@ export class OpenAIExtractor extends BaseLLMExtractor {
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
-      scope: Math.max(0, Math.min(10, parsed.scope)),
+      scopeScore: Math.max(0, Math.min(10, parsed.scope)),
       confidence: Math.max(0, Math.min(1, parsed.confidence ?? 0.5)),
       reasoning: parsed.reasoning ?? '',
     };
@@ -1348,7 +1348,7 @@ export class CustomExtractor extends BaseLLMExtractor {
       this.logger.info('generateScores completed', {
         contentLength: content.length,
         importance: result.importance,
-        scope: result.scope,
+        scopeScore: result.scopeScore,
         confidence: result.confidence
       });
       return result;
@@ -1458,7 +1458,7 @@ export class CustomExtractor extends BaseLLMExtractor {
     }
     return {
       importance: Math.max(0, Math.min(10, parsed.importance)),
-      scope: Math.max(0, Math.min(10, parsed.scope)),
+      scopeScore: Math.max(0, Math.min(10, parsed.scope)),
       confidence: Math.max(0, Math.min(1, parsed.confidence ?? 0.5)),
       reasoning: parsed.reasoning ?? '',
     };

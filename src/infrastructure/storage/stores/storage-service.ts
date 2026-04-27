@@ -5,12 +5,12 @@
  * Manages hot/warm/cold storage tiers and provides a unified interface
  */
 
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { IStorageBackend, IVectorStorageBackend } from '../core/interfaces';
 import { StorageTier } from '../core/types';
 
 // Logger
-const logger = createLogger('StorageService');
+const logger = createServiceLogger('StorageService');
 
 // ============================================================
 // Configuration Types

@@ -5,7 +5,7 @@
  *         内存 Map 作为读写缓存，SQLite 作为持久化后端
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
@@ -19,7 +19,6 @@ import type {
   UserStats,
 } from '../types';
 
-const INTERACTIONS_DB_PATH_KEY = 'profileService.storage.interactionDbPath';
 const MEMORY_LOAD_LIMIT = 1000;
 
 /**
@@ -35,7 +34,7 @@ export class InteractionRecorder {
   private initialized: boolean = false;
 
   constructor() {
-    this.logger = createLogger('interaction-recorder');
+    this.logger = createServiceLogger('InteractionRecorder');
   }
 
   /**
@@ -46,16 +45,11 @@ export class InteractionRecorder {
 
     let dbPath: string;
     try {
-      const cfg = config.getConfigOrThrow<{ interactionDbPath?: string }>('profileService.storage');
-      dbPath = cfg.interactionDbPath ?? '';
+      // 优先从 memoryService.storage.interactionDbPath 获取
+      const cfg = config.getConfig<{ interactionDbPath?: string }>('memoryService.storage');
+      dbPath = cfg?.interactionDbPath ?? '';
     } catch {
-      // fallback: use memoryService.storage.profileDbPath
-      try {
-        const cfg = config.getConfigOrThrow<{ profileDbPath?: string }>('memoryService.storage');
-        dbPath = cfg.profileDbPath ?? '';
-      } catch {
-        dbPath = '';
-      }
+      dbPath = '';
     }
 
     if (!dbPath) {
@@ -472,6 +466,29 @@ export class InteractionRecorder {
       firstInteraction: timestamps[0],
       lastInteraction: timestamps[timestamps.length - 1],
     };
+  }
+
+  /**
+   * 删除用户所有交互数据
+   * v3.0.0: 用于 GDPR 等数据删除场景
+   */
+  async deleteUserData(userId: string): Promise<void> {
+    await this.ensureInitialized();
+
+    // 从内存 Map 删除
+    this.interactions.delete(userId);
+
+    // 从 SQLite 删除
+    if (this.db) {
+      try {
+        this.db.prepare('DELETE FROM user_interactions WHERE userId = ?').run(userId);
+      } catch (error) {
+        this.logger.error('Failed to delete interactions from SQLite', { userId, error });
+        throw error;
+      }
+    }
+
+    this.logger.debug('Deleted all interactions for user', { userId });
   }
 
   /**

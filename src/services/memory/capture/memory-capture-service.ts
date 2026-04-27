@@ -50,7 +50,7 @@ export interface ILLMExtractor {
 
   generateScores(content: string): Promise<{
     importance: number;
-    scope: number;
+    scopeScore: number;
     confidence: number;
     reasoning: string;
   }>;
@@ -297,7 +297,7 @@ export class MemoryCaptureService {
           const captured = await this.storeMemory(
             enriched.item, enriched.summary, scores, input,
             { isNewVersion: false, existingMemoryId: null, similarity: 0 }, now,
-            { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+            { importance: enriched.importance, scopeScore: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
           );
           result.captured.push(captured);
           continue;
@@ -310,7 +310,7 @@ export class MemoryCaptureService {
           const captured = await this.storeMemory(
             enriched.item, enriched.summary, scores, input,
             { isNewVersion: false, existingMemoryId: null, similarity: 0 }, now,
-            { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+            { importance: enriched.importance, scopeScore: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
           );
           result.captured.push(captured);
           continue;
@@ -391,7 +391,7 @@ export class MemoryCaptureService {
         // 存储记忆
         const captured = await this.storeMemory(
           enriched.item, enriched.summary, scores, input, detection, now,
-          { importance: enriched.importance, scope: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
+          { importance: enriched.importance, scopeScore: enriched.scopeScore, confidence: enriched.confidence, reasoning: enriched.reasoning }
         );
         result.captured.push(captured);
       } catch (error) {
@@ -494,7 +494,7 @@ export class MemoryCaptureService {
       item,
       summary,
       importance: llmScores.importance,
-      scopeScore: llmScores.scope,
+      scopeScore: llmScores.scopeScore,
       confidence: llmScores.confidence,
       reasoning: llmScores.reasoning,
     };

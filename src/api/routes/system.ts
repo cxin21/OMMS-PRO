@@ -6,7 +6,7 @@
 
 import { Router, Request, Response } from 'express';
 import { createReadStream, existsSync, statSync, readdirSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, normalize, resolve } from 'path';
 import type { MemoryService } from '../../services/memory';
 import type { DreamingManager } from '../../services/dreaming/dreaming-manager';
 import type { ProfileManager } from '../../services/profile/profile-manager';
@@ -322,7 +322,10 @@ export function createSystemRoutes(deps: SystemRoutesDeps): Router {
         : defaultLogFile;
 
       // 安全检查：确保文件在日志目录内
-      if (!targetFile.startsWith(logDir)) {
+      // 使用 normalize 防止路径遍历攻击，如 /logs/../etc/passwd
+      const normalizedPath = normalize(targetFile);
+      const normalizedLogDir = normalize(logDir);
+      if (!normalizedPath.startsWith(normalizedLogDir + '/')) {
         res.status(403).json({
           success: false,
           error: 'Invalid file path',

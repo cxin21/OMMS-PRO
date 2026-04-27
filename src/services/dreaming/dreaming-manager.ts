@@ -51,6 +51,7 @@ import { StorageOptimizer } from './storage/storage-optimizer';
 import { DreamStorage } from './storage/dream-storage';
 import { config } from '../../shared/config';
 import { ConfigLoader } from '../../shared/config/loader';
+import type { DreamingEngineConfig as DefaultDreamingEngineConfig } from '../../core/types/config';
 import { MemoryScope, MemoryType } from '../../core/types/memory';
 
 /**
@@ -146,7 +147,7 @@ export class DreamingManager {
 
     // 合并配置：优先级 ConfigManager > userConfig > defaults
     const defaults = new ConfigLoader().loadDefaults();
-    const defaultConfig = ObjectUtils.deepClone(defaults.dreamingEngine) as any;
+    const defaultConfig = ObjectUtils.deepClone<DefaultDreamingEngineConfig>(defaults.dreamingEngine);
 
     if (userConfig && Object.keys(userConfig).length > 0) {
       // userConfig 提供的部分覆盖 defaults
@@ -155,7 +156,7 @@ export class DreamingManager {
       // 优先从 ConfigManager 读取配置，否则使用 defaults
       try {
         if (config.isInitialized()) {
-          this.config = ObjectUtils.deepClone(config.getConfig('dreamingEngine')) as any;
+          this.config = ObjectUtils.deepClone<DreamingEngineConfig>(config.getConfig('dreamingEngine'));
         } else {
           this.config = defaultConfig;
         }
@@ -166,14 +167,16 @@ export class DreamingManager {
     }
 
     // 初始化存储
-    this.storage = new DreamStorage(this.config as any);
+    // 注意：DreamStorage 需要 { dbPath?: string } 配置，但 DreamingEngineConfig 不包含 dbPath
+    // 所以传空对象，让 DreamStorage 从 ConfigManager 读取 dbPath
+    this.storage = new DreamStorage({});
   }
 
   /**
    * 获取 Active Learning 配置（从 dreamingEngine.activeLearning 读取）
    */
   private getActiveLearningConfig(): Required<ActiveLearningConfig> {
-    const activeLearning = (this.config as any)?.activeLearning;
+    const activeLearning = this.config?.activeLearning;
     if (!activeLearning) {
       throw new Error('DreamingManager: dreamingEngine.activeLearning configuration is required');
     }
@@ -317,7 +320,7 @@ export class DreamingManager {
       // Phase 1: SCAN
       const phase1Timer = this.logger.startTimer('dreaming.phase1.scan');
       const scanResult = await this.phase1Scan();
-      phase1Timer();
+      phase1Timer.end();
       report.phases.scan = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -330,7 +333,7 @@ export class DreamingManager {
       const phase2Timer = this.logger.startTimer('dreaming.phase2.analyze');
       const analyzeStart = Date.now();
       const analyzeResult = await this.phase2Analyze(scanResult.candidates, input);
-      phase2Timer();
+      phase2Timer.end();
       report.phases.analyze = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -343,7 +346,7 @@ export class DreamingManager {
       const phase3Timer = this.logger.startTimer('dreaming.phase3.execute');
       const executeStart = Date.now();
       const executeResult = await this.phase3Execute(analyzeResult, input);
-      phase3Timer();
+      phase3Timer.end();
       report.phases.execute = {
         scannedCount: scanResult.scannedCount,
         candidateCount: scanResult.candidates.length,
@@ -426,7 +429,7 @@ export class DreamingManager {
       // 默认 similarityThreshold=0.85（来自 config.default.json）
       let resolvedThreshold = 0.85;
       if (config.isInitialized()) {
-        const consolidationConfig = config.getConfig('dreamingEngine.consolidation') as any;
+        const consolidationConfig = config.getConfig<{ similarityThreshold?: number }>('dreamingEngine.consolidation');
         if (consolidationConfig?.similarityThreshold) {
           resolvedThreshold = consolidationConfig.similarityThreshold;
         }
@@ -559,7 +562,7 @@ export class DreamingManager {
 
       // 过滤出指定日期创建的记录
       const filtered = memories.filter(m => {
-        const createdAtMs = typeof m.createdAt === 'number' ? m.createdAt : new Date(m.createdAt as any).getTime();
+        const createdAtMs = typeof m.createdAt === 'number' ? m.createdAt : new Date(m.createdAt as Date).getTime();
         return createdAtMs >= startOfDay && createdAtMs <= endOfDay;
       });
 
@@ -813,7 +816,7 @@ export class DreamingManager {
         summaryLength: summary.length,
         summary: summary.substring(0, 50),
         importance: scores.importance,
-        scope: scores.scope,
+        scopeScore: scores.scopeScore,
         confidence: scores.confidence,
       });
 
@@ -833,7 +836,7 @@ export class DreamingManager {
           summary: summary,
           tags: mergedTags,
           importance: scores.importance,
-          scopeScore: scores.scope,
+          scopeScore: scores.scopeScore,
         },
         {
           archiveSourceIds: mergedMemories,
@@ -848,7 +851,7 @@ export class DreamingManager {
         keywords: consolidated.keywords,
         insights: consolidated.insights,
         importance: scores.importance,
-        scope: scores.scope,
+        scopeScore: scores.scopeScore,
         newVersionId: consolidateResult.newVersionId,
         archivedCount: consolidateResult.archivedCount,
       });
@@ -1097,56 +1100,109 @@ export class DreamingManager {
 
     this.logger.debug('Execute parameters', { limit, maxRelations });
 
-    // Execute independent operations in parallel
-    // 1. Execute memory merge (parallel)
+    // Execute independent operations in parallel with error handling
+    // Each operation catches its own errors to avoid failing the entire batch
+    this.logger.debug('Starting parallel execution with error handling');
+
+    // 1. Execute memory merge (parallel with error handling)
     this.logger.debug('Starting memory merge operation');
     const mergePromise = (async () => {
-      const groups = analyzeResult.similarGroups.slice(0, limit);
-      this.logger.debug('Merge groups prepared', { groupCount: groups.length });
+      try {
+        const groups = analyzeResult.similarGroups.slice(0, limit);
+        this.logger.debug('Merge groups prepared', { groupCount: groups.length });
 
-      const mergeResults = await Promise.all(
-        groups.map(group => this.memoryMerger.mergeGroup(group))
-      );
+        const mergeResults = await Promise.all(
+          groups.map(group => this.memoryMerger.mergeGroup(group).catch(err => {
+            this.logger.warn('mergeGroup failed for group', { error: String(err), group: group.primaryMemory });
+            return { mergedCount: 0, storageFreed: 0, errors: [String(err)] };
+          }))
+        );
 
-      const mergedCount = mergeResults.reduce((sum, r) => sum + r.mergedCount, 0);
-      const storageFreed = mergeResults.reduce((sum, r) => sum + r.storageFreed, 0);
-      this.logger.debug('Merge operation completed', { mergedCount, storageFreed });
+        const mergedCount = mergeResults.reduce((sum, r) => sum + (r.mergedCount || 0), 0);
+        const storageFreed = mergeResults.reduce((sum, r) => sum + (r.storageFreed || 0), 0);
+        this.logger.debug('Merge operation completed', { mergedCount, storageFreed });
 
-      return { mergedCount, storageFreed };
+        return { mergedCount, storageFreed };
+      } catch (err) {
+        this.logger.error('Memory merge operation failed', { error: String(err) });
+        return { mergedCount: 0, storageFreed: 0 };
+      }
     })();
 
-    // 2. Rebuild graph relations (parallel)
+    // 2. Rebuild graph relations (parallel with error handling)
     this.logger.debug('Starting graph rebuild operation');
     const rebuildPromise = (async () => {
-      let rebuiltCount = 0;
-      const relations = analyzeResult.brokenRelations.slice(0, maxRelations);
-      this.logger.debug('Relations to rebuild', { count: relations.length });
+      try {
+        let rebuiltCount = 0;
+        const relations = analyzeResult.brokenRelations.slice(0, maxRelations);
+        this.logger.debug('Relations to rebuild', { count: relations.length });
 
-      // Execute rebuildRelation serially (each relation needs separate processing)
-      for (const relation of relations) {
-        const success = await this.graphReorganizer.rebuildRelation(relation);
-        if (success) {
-          rebuiltCount++;
+        // Execute rebuildRelation serially (each relation needs separate processing)
+        for (const relation of relations) {
+          try {
+            const success = await this.graphReorganizer.rebuildRelation(relation);
+            if (success) {
+              rebuiltCount++;
+            }
+          } catch (err) {
+            this.logger.warn('rebuildRelation failed for relation', {
+              error: String(err),
+              from: relation.from,
+              to: relation.to
+            });
+          }
         }
-      }
-      this.logger.debug('Rebuild operation completed', { rebuiltCount });
+        this.logger.debug('Rebuild operation completed', { rebuiltCount });
 
-      return rebuiltCount;
+        return rebuiltCount;
+      } catch (err) {
+        this.logger.error('Graph rebuild operation failed', { error: String(err) });
+        return 0;
+      }
     })();
 
-    // 3. Archive memories (parallel)
+    // 3. Archive memories (parallel with error handling)
     this.logger.debug('Starting memory archive operation');
-    const archivePromise = this.storageOptimizer.archiveMemories(
-      analyzeResult.archivalCandidates.slice(0, limit)
-    );
+    const archivePromise = (async () => {
+      try {
+        return await this.storageOptimizer.archiveMemories(
+          analyzeResult.archivalCandidates.slice(0, limit)
+        );
+      } catch (err) {
+        this.logger.error('Archive operation failed', { error: String(err) });
+        return 0;
+      }
+    })();
 
     // Wait for all parallel tasks to complete
+    // Use safe version that doesn't fail completely if one task fails
+    let mergeResult = { mergedCount: 0, storageFreed: 0 };
+    let rebuiltCount = 0;
+    let archivedCount = 0;
+
     this.logger.debug('Waiting for parallel tasks to complete');
-    const [mergeResult, rebuiltCount, archivedCount] = await Promise.all([
-      mergePromise,
-      rebuildPromise,
-      archivePromise,
-    ]);
+    try {
+      const results = await Promise.allSettled([mergePromise, rebuildPromise, archivePromise]);
+
+      if (results[0].status === 'fulfilled') {
+        mergeResult = results[0].value;
+      }
+      if (results[1].status === 'fulfilled') {
+        rebuiltCount = results[1].value;
+      }
+      if (results[2].status === 'fulfilled') {
+        archivedCount = results[2].value;
+      }
+
+      // Log any rejected promises
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          this.logger.warn(`Parallel task ${index} rejected`, { reason: result.reason });
+        }
+      });
+    } catch (err) {
+      this.logger.error('Unexpected error waiting for parallel tasks', { error: String(err) });
+    }
 
     this.logger.debug('All parallel tasks completed', {
       mergeResult,

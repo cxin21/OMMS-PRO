@@ -6,7 +6,7 @@
  * @since v2.0.0
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { TransactionCoordinator } from '../../memory/utils/transaction-manager';
 import type {
   IGraphStore,
@@ -52,7 +52,7 @@ export class GraphReorganizer {
     private metaStore: ISQLiteMetaStore,
     config?: Partial<ReorganizationConfig>
   ) {
-    this.logger = createLogger('dreaming-engine', { module: 'graph-reorganizer' });
+    this.logger = createServiceLogger('GraphReorganizer');
 
     // 默认配置
     this.config = {

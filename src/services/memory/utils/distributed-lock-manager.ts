@@ -7,7 +7,7 @@
 
 import Database from 'better-sqlite3';
 import { join } from 'path';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 
 /**
@@ -42,7 +42,7 @@ export class DistributedLockManager {
     private ttlMs: number = DistributedLockManager.DEFAULT_TTL_MS,
     private maxLocks: number = DistributedLockManager.DEFAULT_MAX_LOCKS
   ) {
-    this.logger = createLogger('DistributedLockManager', { enabled: true });
+    this.logger = createServiceLogger('DistributedLockManager');
     this.db = new Database(dbPath);
     this.initialize();
   }

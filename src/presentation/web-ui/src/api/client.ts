@@ -195,14 +195,44 @@ export interface DreamingConfig {
   archival: DreamingArchivalConfig
 }
 
+export interface PersonalityTrait {
+  trait: string;
+  strength: number;
+}
+
+export interface Interest {
+  name: string;
+  keywords: string[];
+}
+
+export interface CommunicationStyle {
+  directness: number;
+  formality: number;
+  tone: string;
+}
+
 export interface Persona {
-  id?: string
-  name: string
-  description: string
-  traits: string[]
-  communicationStyle?: string
-  version?: number
-  updatedAt?: number
+  id?: string;
+  userId?: string;
+  version: number;
+  createdAt?: number;
+  updatedAt?: number;
+  name?: string;
+  age?: string;
+  gender?: string;
+  occupation?: string;
+  location?: string;
+  personalityTraits: PersonalityTrait[];
+  interests: Interest[];
+  communicationStyle?: CommunicationStyle;
+  values: string[];
+  goals: string[];
+  background?: string;
+  confidence?: number;
+  sources?: string[];
+  tags?: string[];
+  previousVersionId?: string;
+  changeSummary?: string;
 }
 
 export interface UserPreferences {

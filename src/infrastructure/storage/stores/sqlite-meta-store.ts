@@ -15,7 +15,7 @@ import type {
   SQLiteQueryOptions,
   VersionInfo,
 } from '../core/types';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
@@ -50,7 +50,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
 
   constructor(userConfig: Partial<{ dbPath: string }> = {}) {
     this.config = { dbPath: userConfig?.dbPath ?? '' };
-    this.logger = createLogger('SQLiteMetaStore', { enabled: true });
+    this.logger = createServiceLogger('SQLiteMetaStore');
     this.db = null;
     this.initialized = false;
     this.migrated = false;
@@ -388,6 +388,10 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       if (updates.usedByAgents !== undefined) {
         fields.push('usedByAgents = ?');
         values.push(JSON.stringify(updates.usedByAgents));
+      }
+      if (updates.summary !== undefined) {
+        fields.push('summary = ?');
+        values.push(updates.summary);
       }
       if (updates.palace !== undefined) {
         fields.push('wingId = ?');
@@ -926,9 +930,10 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       // 迁移成功后设置标志（即使列已存在也设置，避免重复检查）
       this.migrated = true;
     } catch (error) {
-      // 记录错误但仍设置标志，避免无限重试
-      this.logger.error('Migration failed', { error: String(error) });
-      this.migrated = true;  // 设置标志防止无限重试，即使失败也继续
+      // 记录错误但不设置标志，下次调用时会重试迁移
+      // 这样可以避免数据库在迁移失败后处于不一致状态
+      this.logger.error('Migration failed - will retry on next operation', { error: String(error) });
+      // 不设置 this.migrated = true，让迁移在下次操作时重试
     }
   }
 

@@ -20,7 +20,7 @@ import type {
 import { MemoryStoreManager } from '../store/memory-store-manager';
 import { MemoryRecallManager, RecallOutput, RecallMemory } from '../recall/memory-recall-manager';
 import { MemoryDegradationManager } from '../degradation/memory-degradation-manager';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import type { LLMScoringResult, ILLMExtractor } from '../llm/llm-extractor';
 import { config } from '../../../shared/config';
 import type { StorageService } from '../../../infrastructure/storage/stores/storage-service';
@@ -28,6 +28,7 @@ import { MemoryAccessControl, type AccessLevel, type AccessDecision } from '../.
 import { IndexUpdateStrategy, type IndexUpdateTask, type IndexPriority } from '../../../infrastructure/indexing/index-update-strategy';
 import { RecallStrategy, type RecallContext, type RecallResult as StrategyRecallResult } from '../../../core/domain/memory/recall-strategy';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
+import { getReinforcementConfig, getScopeDegradationConfig } from '../utils/memory-config-utils';
 
 /**
  * StorageMemoryService
@@ -48,7 +49,13 @@ export class StorageMemoryService {
   private storeManager: MemoryStoreManager;
   private recallManager: MemoryRecallManager;
   private degradationManager: MemoryDegradationManager;
-  private storageService?: StorageService;
+
+  // Store references for direct access (initialized from stores in constructor)
+  private _metaStore: ISQLiteMetaStore;
+  private _vectorStore: IVectorStore;
+  private _palaceStore: IPalaceStore;
+  private _cache: ICacheManager;
+  private _graphStore: IGraphStore;
 
   // New integrated components
   private accessControl?: MemoryAccessControl;
@@ -75,7 +82,7 @@ export class StorageMemoryService {
     },
     storageService?: StorageService
   ) {
-    this.logger = createLogger('StorageMemoryService');
+    this.logger = createServiceLogger('StorageMemoryService');
     this.configManager = {
       enableCache: configManager?.enableCache ?? true,
       enableVector: configManager?.enableVector ?? true,
@@ -116,11 +123,23 @@ export class StorageMemoryService {
       stores.graphStore
     );
 
+    // Store references for direct access (avoid unsafe type casting)
+    this._cache = stores.cache;
+    this._metaStore = stores.metaStore;
+    this._vectorStore = stores.vectorStore;
+    this._palaceStore = stores.palaceStore;
+    this._graphStore = stores.graphStore;
+
     // Initialize MemoryAccessControl if enabled
     if (this.configManager.enableAccessControl) {
-      const accessControlConfig = (config.getConfig('memoryService.accessControl') as any) || {};
+      const accessControlConfig = config.getConfig<{
+        defaultAccessLevel?: string;
+        auditEnabled?: boolean;
+        policyCacheSize?: number;
+        systemAgentId?: string;
+      }>('memoryService.accessControl') || {};
       this.accessControl = new MemoryAccessControl({
-        defaultAccessLevel: accessControlConfig.defaultAccessLevel ?? 'read',
+        defaultAccessLevel: (accessControlConfig.defaultAccessLevel ?? 'read') as AccessLevel,
         auditEnabled: accessControlConfig.auditEnabled ?? true,
         policyCacheSize: accessControlConfig.policyCacheSize ?? 1000,
       });
@@ -131,7 +150,17 @@ export class StorageMemoryService {
 
     // Initialize IndexUpdateStrategy if enabled
     if (this.configManager.enableIndexUpdate) {
-      const indexUpdateConfig = (config.getConfig('memoryService.indexUpdate') as any) || {};
+      const indexUpdateConfig = config.getConfig<{
+        mode?: 'immediate' | 'batch' | 'scheduled';
+        batchSize?: number;
+        batchDelayMs?: number;
+        maxPendingTasks?: number;
+        highPriorityThreshold?: number;
+        scheduledIntervalMs?: number;
+        maxRetries?: number;
+        baseRetryDelayMs?: number;
+        maxRetryDelayMs?: number;
+      }>('memoryService.indexUpdate') || {};
       this.indexUpdateStrategy = new IndexUpdateStrategy({
         mode: indexUpdateConfig.mode ?? 'batch',
         batchSize: indexUpdateConfig.batchSize ?? 100,
@@ -148,7 +177,15 @@ export class StorageMemoryService {
 
     // Initialize RecallStrategy if enabled
     if (this.configManager.enableRecallStrategy) {
-      const recallStrategyConfig = (config.getConfig('memoryService.recallStrategy') as any) || {};
+      const recallStrategyConfig = config.getConfig<{
+        timeDecayFactor?: number;
+        diversityWeight?: number;
+        contextWeight?: number;
+        feedbackWeight?: number;
+        maxResults?: number;
+        minDiversityScore?: number;
+        feedbackDecayMs?: number;
+      }>('memoryService.recallStrategy') || {};
       this.recallStrategy = new RecallStrategy({
         timeDecayFactor: recallStrategyConfig.timeDecayFactor ?? 0.5,
         diversityWeight: recallStrategyConfig.diversityWeight ?? 0.2,
@@ -159,11 +196,6 @@ export class StorageMemoryService {
         feedbackDecayMs: recallStrategyConfig.feedbackDecayMs ?? 86400000,
       });
       this.logger.info('RecallStrategy initialized');
-    }
-
-    // If StorageService is provided, use it for unified access
-    if (storageService) {
-      this.storageService = storageService;
     }
 
     this.logger.info('StorageMemoryService initialized', this.configManager);
@@ -179,15 +211,15 @@ export class StorageMemoryService {
 
   // Getters for stores (used by listMemories)
   get metaStore(): ISQLiteMetaStore {
-    return (this.storeManager as any).metaStore;
+    return this._metaStore;
   }
 
   get vectorStore(): IVectorStore {
-    return (this.recallManager as any).vectorStore;
+    return this._vectorStore;
   }
 
   get palaceStore(): IPalaceStore {
-    return (this.recallManager as any).palaceStore;
+    return this._palaceStore;
   }
 
   /**
@@ -323,10 +355,19 @@ export class StorageMemoryService {
   /**
    * 列出记忆（不带召回语义，不更新访问统计）
    * 用于管理页面浏览记忆列表
+   *
+   * 支持的过滤选项：
+   * - agentId: 按创建者 Agent ID 精确过滤
+   * - types: 按记忆类型过滤（多选）
+   * - scopes: 按作用域过滤（多选）
+   * - blocks: 按存储区块过滤
+   * - orderBy: 排序字段
+   * - orderDir: 排序方向
    */
   async listMemories(options?: {
     limit?: number;
     offset?: number;
+    agentId?: string;
     types?: MemoryType[];
     scopes?: MemoryScope[];
     blocks?: string[];
@@ -338,6 +379,7 @@ export class StorageMemoryService {
 
     // 构建查询选项
     const queryOptions: {
+      agentId?: string;
       types?: MemoryType[];
       scopes?: MemoryScope[];
       limit: number;
@@ -346,6 +388,7 @@ export class StorageMemoryService {
       orderDir?: 'asc' | 'desc';
       isLatestVersion: boolean;
     } = {
+      agentId: options?.agentId,
       types: options?.types,
       scopes: options?.scopes,
       limit: limit + offset,
@@ -360,6 +403,7 @@ export class StorageMemoryService {
 
     // 获取总数（不带offset/limit）
     const total = await this.metaStore.count({
+      agentId: options?.agentId,
       types: options?.types,
       scopes: options?.scopes,
       isLatestVersion: true,
@@ -569,6 +613,40 @@ export class StorageMemoryService {
   }
 
   /**
+   * 删除用户所有数据
+   * 用于 GDPR 等数据删除场景
+   */
+  async deleteUserData(userId: string): Promise<void> {
+    this.logger.info('deleteUserData 方法调用', { userId });
+
+    // 获取用户所有记忆
+    const result = await this.recall({
+      agentId: userId,
+      limit: 10000,
+    });
+
+    // 删除每个记忆
+    let deletedCount = 0;
+    for (const memory of result.memories) {
+      try {
+        await this.delete(memory.uid);
+        deletedCount++;
+      } catch (error) {
+        this.logger.error('Failed to delete memory during deleteUserData', {
+          userId,
+          memoryId: memory.uid,
+          error,
+        });
+      }
+    }
+
+    // 注意：Graph 清理需要在 GraphStore 层面实现
+    // 当前 StorageMemoryService 不直接持有 graphStore 引用
+
+    this.logger.info('deleteUserData 方法返回', { userId, deletedCount });
+  }
+
+  /**
    * 强化记忆
    */
   async reinforce(memoryId: string, boostAmount?: number): Promise<RecallMemory | null> {
@@ -604,36 +682,19 @@ export class StorageMemoryService {
 
   /**
    * 计算强化幅度
-   * 根据配置：
+   * 使用 getReinforcementConfig() 从 ConfigManager 获取配置：
    * - currentImportance < lowBoostThreshold (3) → lowBoost (0.5)
    * - currentImportance < mediumBoostThreshold (6) → mediumBoost (0.3)
    * - currentImportance < highBoostThreshold (7) → highBoost (0.1)
    * - currentImportance >= highBoostThreshold (7) → defaultBoost (0.2)
    */
   private calculateBoost(currentImportance: number): number {
-    if (!config.isInitialized()) {
-      throw new Error('StorageMemoryService: ConfigManager not initialized. Cannot calculate boost.');
-    }
+    const reinforceConfig = getReinforcementConfig();
 
-    // 从 memoryService.reinforcement 读取（新版配置路径）
-    const reinforceConfig = config.getConfigOrThrow<any>('memoryService.reinforcement');
-
-    if (!reinforceConfig) {
-      throw new Error('StorageMemoryService: reinforcement config not found in ConfigManager.');
-    }
-
-    const lowThreshold = reinforceConfig.lowBoostThreshold;
-    const mediumThreshold = reinforceConfig.mediumBoostThreshold;
-    const highThreshold = reinforceConfig.highBoostThreshold;
-    const lowBoost = reinforceConfig.lowBoost;
-    const mediumBoost = reinforceConfig.mediumBoost;
-    const highBoost = reinforceConfig.highBoost;
-    const defaultBoost = reinforceConfig.defaultBoost;
-
-    if (currentImportance < lowThreshold) return lowBoost;
-    if (currentImportance < mediumThreshold) return mediumBoost;
-    if (currentImportance < highThreshold) return highBoost;
-    return defaultBoost;
+    if (currentImportance < reinforceConfig.lowBoostThreshold) return reinforceConfig.lowBoost;
+    if (currentImportance < reinforceConfig.mediumBoostThreshold) return reinforceConfig.mediumBoost;
+    if (currentImportance < reinforceConfig.highBoostThreshold) return reinforceConfig.highBoost;
+    return reinforceConfig.defaultBoost;
   }
 
   /**
@@ -680,34 +741,21 @@ export class StorageMemoryService {
 
   /**
    * 判断是否应该升级作用域（双评分升级算法）
-   *
-   * 升级规则（基于双评分）：
+   * 使用 getScopeDegradationConfig() 从 ConfigManager 获取配置：
    * - SESSION → AGENT: importance >= sessionUpgradeRecallThreshold (默认5)
    * - AGENT → GLOBAL: scopeScore >= upgradeScopeScoreMax (默认10) AND importance >= agentUpgradeRecallThreshold (默认10)
    *
    * 注意: recallCount 和 usedByAgents 在 RecallMemory 中不可用，使用基于 importance/scopeScore 的双评分规则
    */
   private shouldUpgrade(memory: RecallMemory): boolean {
-    if (!config.isInitialized()) {
-      throw new Error('StorageMemoryService: ConfigManager not initialized. Cannot check scope upgrade.');
-    }
+    const scopeConfig = getScopeDegradationConfig();
 
-    // 从 scopeDegradation 配置读取升级阈值
-    const scopeConfig = config.getConfig('memoryService.scopeDegradation') as any;
-    if (!scopeConfig) {
-      throw new Error('StorageMemoryService: memoryService.scopeDegradation not found in ConfigManager.');
-    }
-
-    const sessionThreshold = scopeConfig.sessionUpgradeRecallThreshold;
-    const scopeScoreThreshold = scopeConfig.upgradeScopeScoreMax;
-    const agentThreshold = scopeConfig.agentUpgradeRecallThreshold;
-
-    if (memory.scope === MemoryScope.SESSION && memory.importance >= sessionThreshold) {
+    if (memory.scope === MemoryScope.SESSION && memory.importance >= scopeConfig.sessionUpgradeRecallThreshold) {
       return true;
     }
     if (memory.scope === MemoryScope.AGENT &&
-        memory.scopeScore >= scopeScoreThreshold &&
-        memory.importance >= agentThreshold) {
+        memory.scopeScore >= scopeConfig.upgradeScopeScoreMax &&
+        memory.importance >= scopeConfig.agentUpgradeRecallThreshold) {
       return true;
     }
 

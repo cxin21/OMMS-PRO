@@ -5,7 +5,7 @@
  * 支持 SQLite 持久化，TTL 过期的数据在 SQLite 中标记为 expired 但保留
  */
 
-import { createLogger, type ILogger } from '../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../shared/logging';
 import { config } from '../../shared/config';
 import { FileUtils } from '../../shared/utils/file';
 import { dirname } from 'path';
@@ -49,7 +49,7 @@ export class ProfileCache {
   private initialized: boolean = false;
 
   constructor(options?: ProfileCacheOptions) {
-    this.logger = createLogger('profile-cache');
+    this.logger = createServiceLogger('ProfileCache');
 
     // Try to read cache config from ConfigManager
     let cacheMaxSize = 1000;

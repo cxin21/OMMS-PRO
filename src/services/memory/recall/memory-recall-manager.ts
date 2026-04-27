@@ -33,6 +33,7 @@ import { TransactionManager } from '../utils/transaction-manager';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
 import { prescreenByAAAK } from '../search/aaak-prescreen';
 import { rerankWithBM25 } from '../search/hybrid-search';
+import { getReinforcementConfig, getRecallConfig } from '../utils/memory-config-utils';
 
 // ============================================================
 // 类型定义
@@ -277,7 +278,7 @@ const DEFAULT_RECALL_CONFIG: RecallConfig = {
 export class MemoryRecallManager {
   private logger: ILogger;
   private config: RecallConfig;
-  private reinforcementConfig: {
+  private reinforcementConfig!: {
     lowBoostThreshold: number;
     mediumBoostThreshold: number;
     highBoostThreshold: number;
@@ -298,56 +299,41 @@ export class MemoryRecallManager {
   ) {
     this.logger = createServiceLogger('MemoryRecallManager');
 
-    // 默认强化配置
-    this.reinforcementConfig = {
-      lowBoostThreshold: 3,
-      mediumBoostThreshold: 6,
-      highBoostThreshold: 7,
-      lowBoost: 0.5,
-      mediumBoost: 0.3,
-      highBoost: 0.1,
-      defaultBoost: 0.2,
-    };
-
     // 如果传入了配置则使用，否则从 ConfigManager 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
       this.config = { ...DEFAULT_RECALL_CONFIG, ...userConfig };
       this.logger.info('MemoryRecallManager using user-provided config', { config: this.config });
     } else {
-      // 默认配置（与 config.default.json 一致）
+      // 从 ConfigManager 获取配置（使用集中化的配置读取函数）
       this.config = { ...DEFAULT_RECALL_CONFIG };
-      if (config.isInitialized()) {
-        const recallConfig = config.getConfig('memoryService.recall') as MemoryRecallConfig;
-        const reinforcement = config.getConfig('memoryService.reinforcement') as any;
-        if (reinforcement) {
-          this.reinforcementConfig = {
-            lowBoostThreshold: reinforcement.lowBoostThreshold ?? 3,
-            mediumBoostThreshold: reinforcement.mediumBoostThreshold ?? 6,
-            highBoostThreshold: reinforcement.highBoostThreshold ?? 7,
-            lowBoost: reinforcement.lowBoost ?? 0.5,
-            mediumBoost: reinforcement.mediumBoost ?? 0.3,
-            highBoost: reinforcement.highBoost ?? 0.1,
-            defaultBoost: reinforcement.defaultBoost ?? 0.2,
-          };
-        }
-        if (recallConfig) {
-          this.config = {
-            ...this.config,
-            defaultLimit: recallConfig.defaultLimit ?? DEFAULT_RECALL_CONFIG.defaultLimit,
-            maxLimit: recallConfig.maxLimit ?? DEFAULT_RECALL_CONFIG.maxLimit,
-            enableVectorSearch: recallConfig.enableVectorSearch ?? DEFAULT_RECALL_CONFIG.enableVectorSearch,
-            enableKeywordSearch: recallConfig.enableKeywordSearch ?? DEFAULT_RECALL_CONFIG.enableKeywordSearch,
-            vectorWeight: recallConfig.vectorWeight ?? DEFAULT_RECALL_CONFIG.vectorWeight,
-            keywordWeight: recallConfig.keywordWeight ?? DEFAULT_RECALL_CONFIG.keywordWeight,
-            scopeBoost: reinforcement?.scopeBoost ?? DEFAULT_RECALL_CONFIG.scopeBoost,
-          };
-        }
-      }
+      const recallConfig = getRecallConfig();
+      const reinforcementConfig = getReinforcementConfig();
+
+      this.config = {
+        ...this.config,
+        defaultLimit: recallConfig.defaultLimit,
+        maxLimit: recallConfig.maxLimit,
+        enableVectorSearch: recallConfig.enableVectorSearch,
+        enableKeywordSearch: recallConfig.enableKeywordSearch,
+        vectorWeight: recallConfig.vectorWeight,
+        keywordWeight: recallConfig.keywordWeight,
+        scopeBoost: reinforcementConfig.scopeBoost,
+      };
+      this.reinforcementConfig = {
+        lowBoostThreshold: reinforcementConfig.lowBoostThreshold,
+        mediumBoostThreshold: reinforcementConfig.mediumBoostThreshold,
+        highBoostThreshold: reinforcementConfig.highBoostThreshold,
+        lowBoost: reinforcementConfig.lowBoost,
+        mediumBoost: reinforcementConfig.mediumBoost,
+        highBoost: reinforcementConfig.highBoost,
+        defaultBoost: reinforcementConfig.defaultBoost,
+      };
       this.logger.info('MemoryRecallManager loaded config', { config: this.config });
     }
 
-    // 使用 wrapWithErrorBoundary 包装 recall 方法
-    this.recall = wrapWithErrorBoundary(this.logger, 'MemoryRecallManager.recall', this.recall.bind(this)) as any;
+    // Note: wrapWithErrorBoundary is not applied to the recall method directly
+    // to avoid recursive wrapping. Use wrapWithErrorBoundary at the call site instead.
+    // this.recall = wrapWithErrorBoundary(this.logger, 'MemoryRecallManager.recall', this.recall.bind(this)) as any;
   }
 
   // 缓存预热 Promise 追踪（防止并发重复预热）
@@ -881,9 +867,10 @@ export class MemoryRecallManager {
       },
     });
 
-    // 4. 过滤已召回的
+    // 4. 过滤已召回的和嵌入失败的记忆
+    // 嵌入失败的记忆使用零向量，相似度计算无意义，应排除
     const finalFiltered = vectorResults.filter(
-      (r) => !params.excludeUids.includes(r.id)
+      (r) => !params.excludeUids.includes(r.id) && !(r.metadata as any)?.embeddingFailed
     );
 
     if (finalFiltered.length === 0) {
@@ -1224,7 +1211,9 @@ export class MemoryRecallManager {
 
         // 只更新评分，不触发作用域升级
         // 作用域升级统一通过 checkAndUpgradeScope() 或 degradationManager 处理
-        const updatePromise = this.metaStore
+        // 注意：同时更新 metaStore 和 vectorStore 的 importanceScore/scopeScore
+        // 以确保向量搜索结果能反映强化后的重要性变化
+        const metaUpdatePromise = this.metaStore
           .update(memory.uid, {
             importanceScore: newImportance,
             scopeScore: newScopeScore,
@@ -1233,12 +1222,26 @@ export class MemoryRecallManager {
             usedByAgents: newUsedByAgents,
           })
           .catch((error) => {
-            this.logger.warn('Failed to apply reinforcement', {
+            this.logger.warn('Failed to apply reinforcement to metaStore', {
               uid: memory.uid,
               error: String(error),
             });
           });
-        updatePromises.push(updatePromise);
+
+        // 同时更新向量索引中的元数据，确保搜索能反映新的重要性评分
+        const vectorUpdatePromise = this.vectorStore
+          .updateMetadata(memory.uid, {
+            importanceScore: newImportance,
+            scopeScore: newScopeScore,
+          })
+          .catch((error) => {
+            this.logger.warn('Failed to apply reinforcement to vectorStore', {
+              uid: memory.uid,
+              error: String(error),
+            });
+          });
+
+        updatePromises.push(metaUpdatePromise, vectorUpdatePromise);
       }
 
       await Promise.all(updatePromises);

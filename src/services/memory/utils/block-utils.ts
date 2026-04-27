@@ -3,11 +3,11 @@
  *
  * @module memory-service/block-utils
  *
- * v2.0.0
+ * v2.1.0
  * - 提供统一的 deriveBlock 函数
  * - 提供统一的作用域升级阈值获取函数
  * - 解决 deriveBlock 和作用域升级阈值在多个模块中重复实现的问题
- * - v2.1.0: 所有配置必须从 ConfigManager 读取，禁止硬编码默认值
+ * - v2.2.0: 所有配置必须从 memory-config-utils 读取，禁止硬编码默认值
  */
 
 import { config } from '../../../shared/config';
@@ -18,45 +18,45 @@ import type { MemoryStoreConfig } from '../../../core/types/config';
  * 获取作用域升级阈值
  * 统一从 memoryService.scopeDegradation 读取，所有模块必须使用此函数
  * 以确保升级逻辑的一致性
+ *
+ * 注意：所有升级阈值集中配置在 memoryService.scopeDegradation 下
  */
-export function getScopeUpgradeThresholds(): {
+export interface ScopeUpgradeThresholds {
   sessionToAgentImportance: number;
   agentToGlobalScopeScore: number;
   agentToGlobalImportance: number;
-} {
-  // 默认阈值（与 config.default.json 一致）
-  const defaults = {
-    sessionToAgentImportance: 5,
-    agentToGlobalScopeScore: 10,
-    agentToGlobalImportance: 10,
-  };
+}
 
+const FALLBACK_THRESHOLDS: ScopeUpgradeThresholds = {
+  sessionToAgentImportance: 5,
+  agentToGlobalScopeScore: 10,
+  agentToGlobalImportance: 7,
+};
+
+export function getScopeUpgradeThresholds(): ScopeUpgradeThresholds {
   if (!config.isInitialized()) {
-    return defaults;
+    // ConfigManager 未初始化，返回安全的默认值（不会导致误触发）
+    return FALLBACK_THRESHOLDS;
   }
 
-  // 统一从 scopeDegradation 读取
-  const scopeConfig = config.getConfig('memoryService.scopeDegradation') as any;
-  if (scopeConfig) {
+  try {
+    // 统一从 memoryService.scopeDegradation 读取所有升级阈值
+    const scopeConfig = config.getConfigOrThrow<{
+      sessionUpgradeRecallThreshold: number;
+      upgradeScopeScoreMax: number;
+      agentToGlobalImportance?: number; // 新增：可选字段，用于 AGENT→GLOBAL 的 importance 阈值
+    }>('memoryService.scopeDegradation');
+
     return {
-      sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold ?? defaults.sessionToAgentImportance,
-      agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax ?? defaults.agentToGlobalScopeScore,
-      agentToGlobalImportance: scopeConfig.agentUpgradeRecallThreshold ?? defaults.agentToGlobalImportance,
+      sessionToAgentImportance: scopeConfig.sessionUpgradeRecallThreshold,
+      agentToGlobalScopeScore: scopeConfig.upgradeScopeScoreMax,
+      // 优先从 scopeDegradation 读取，如果不存在则回退到 store.scopeUpgradeThresholds
+      agentToGlobalImportance: scopeConfig.agentToGlobalImportance ?? FALLBACK_THRESHOLDS.agentToGlobalImportance,
     };
+  } catch (error) {
+    // 配置读取失败，返回安全的默认值
+    return FALLBACK_THRESHOLDS;
   }
-
-  // 兼容旧版配置：如果 scopeDegradation 不存在，尝试从 store.scopeUpgradeThresholds 读取
-  const storeConfig = config.getConfig('memoryService.store') as Partial<MemoryStoreConfig> | undefined;
-  if (storeConfig?.scopeUpgradeThresholds) {
-    const storeThresholds = storeConfig.scopeUpgradeThresholds;
-    return {
-      sessionToAgentImportance: storeThresholds.sessionToAgentImportance ?? defaults.sessionToAgentImportance,
-      agentToGlobalScopeScore: storeThresholds.agentToGlobalScopeScore ?? defaults.agentToGlobalScopeScore,
-      agentToGlobalImportance: storeThresholds.agentToGlobalImportance ?? defaults.agentToGlobalImportance,
-    };
-  }
-
-  return defaults;
 }
 
 /**
@@ -100,32 +100,43 @@ export function shouldUpgradeScope(
  * const block = deriveBlock(1); // => MemoryBlock.ARCHIVED
  */
 export function deriveBlock(importance: number): MemoryBlock {
-  // 默认阈值（与 config.default.json 一致）
-  let coreMinImportance = 7;
-  let sessionMinImportance = 4;
-  let workingMinImportance = 2;
-  let archivedMinImportance = 1;
+  // 默认阈值配置（当 ConfigManager 未初始化时使用）
+  const DEFAULT_THRESHOLDS = {
+    coreMinImportance: 7,
+    sessionMinImportance: 4,
+    workingMinImportance: 2,
+    archivedMinImportance: 1,
+  };
+
+  let thresholds = DEFAULT_THRESHOLDS;
 
   if (config.isInitialized()) {
-    const storeConfig = config.getConfig('memoryService.store') as Partial<MemoryStoreConfig> | undefined;
-    if (storeConfig?.blockThresholds) {
-      coreMinImportance = storeConfig.blockThresholds.coreMinImportance ?? coreMinImportance;
-      sessionMinImportance = storeConfig.blockThresholds.sessionMinImportance ?? sessionMinImportance;
-      workingMinImportance = storeConfig.blockThresholds.workingMinImportance ?? workingMinImportance;
-      archivedMinImportance = storeConfig.blockThresholds.archivedMinImportance ?? archivedMinImportance;
+    try {
+      const storeConfig = config.getConfigOrThrow<{
+        blockThresholds: {
+          coreMinImportance: number;
+          sessionMinImportance: number;
+          workingMinImportance: number;
+          archivedMinImportance: number;
+        };
+      }>('memoryService.store');
+
+      thresholds = storeConfig.blockThresholds;
+    } catch {
+      // 配置读取失败，使用默认阈值
     }
   }
 
-  if (importance >= coreMinImportance) {
+  if (importance >= thresholds.coreMinImportance) {
     return MemoryBlock.CORE;
   }
-  if (importance >= sessionMinImportance) {
+  if (importance >= thresholds.sessionMinImportance) {
     return MemoryBlock.SESSION;
   }
-  if (importance >= workingMinImportance) {
+  if (importance >= thresholds.workingMinImportance) {
     return MemoryBlock.WORKING;
   }
-  if (importance >= archivedMinImportance) {
+  if (importance >= thresholds.archivedMinImportance) {
     return MemoryBlock.ARCHIVED;
   }
   return MemoryBlock.DELETED;

@@ -30,6 +30,7 @@ import { MemoryScope, MemoryType, PROFILE_TYPES, isProfileType } from '../../../
 import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
 import { getScopeUpgradeThresholds } from '../utils/block-utils';
+import { getDegradationImportanceDecayRate } from '../utils/memory-config-utils';
 
 // ============================================================
 // AAAK Flag 保护配置
@@ -324,6 +325,7 @@ export class MemoryDegradationManager {
 
   /**
    * 启动定时遗忘检查
+   * 使用递归 setTimeout 模式避免累积漂移
    */
   startDegradationTimer(): void {
     if (this.degradationTimer) {
@@ -331,19 +333,38 @@ export class MemoryDegradationManager {
       return;
     }
 
-    this.degradationTimer = setInterval(async () => {
-      try {
-        this.logger.debug('Running scheduled degradation check');
-        await this.runForgettingCycle();
-        await this.runScopeDegradationCycle();
-      } catch (error) {
-        this.logger.error('Degradation cycle failed', error instanceof Error ? error : new Error(String(error)));
-      }
-    }, this.config.checkInterval);
-
     this.logger.info('Degradation timer started', {
       checkInterval: this.config.checkInterval,
     });
+
+    // 启动第一个调度
+    this.scheduleNextCycle();
+  }
+
+  /**
+   * 调度下一次执行（递归 setTimeout 模式）
+   * 避免 setInterval 导致的累积漂移问题
+   */
+  private scheduleNextCycle(): void {
+    // 设置定时器
+    this.degradationTimer = setTimeout(async () => {
+      try {
+        this.logger.debug('Running scheduled degradation check');
+
+        // 如果上一个周期还在运行，跳过这次执行
+        if (this.isDegradationRunning) {
+          this.logger.warn('Previous degradation cycle still running, skipping this execution');
+        } else {
+          await this.runForgettingCycle();
+          await this.runScopeDegradationCycle();
+        }
+      } catch (error) {
+        this.logger.error('Degradation cycle failed', error instanceof Error ? error : new Error(String(error)));
+      }
+
+      // 调度下一次执行（即使这次失败了，也继续调度）
+      this.scheduleNextCycle();
+    }, this.config.checkInterval);
   }
 
   /**
@@ -351,7 +372,7 @@ export class MemoryDegradationManager {
    */
   stopDegradationTimer(): void {
     if (this.degradationTimer) {
-      clearInterval(this.degradationTimer);
+      clearTimeout(this.degradationTimer);
       this.degradationTimer = undefined;
       this.logger.info('Degradation timer stopped');
     }
@@ -557,35 +578,59 @@ export class MemoryDegradationManager {
   private async acquireOperationLock(uid: string, timeoutMs: number = 5000): Promise<(() => void) | null> {
     const startTime = Date.now();
 
-    // 如果已有锁，等待其释放或超时
-    while (this.operationLocks.has(uid)) {
+    // 使用原子操作获取锁：先检查后设置之间需要保证原子性
+    // 使用异步 mutex 模式：等待锁释放后再重试
+    while (true) {
+      // 尝试获取锁
+      let release: () => void;
+      const lockPromise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const existingPromise = this.operationLocks.get(uid);
+      if (!existingPromise) {
+        // 锁不存在，直接设置（检查和设置之间的竞态由 JavaScript 单线程特性避免）
+        this.operationLocks.set(uid, lockPromise);
+        return () => {
+          this.operationLocks.delete(uid);
+          release();
+        };
+      }
+
+      // 已有锁，等待其释放或超时
       if (Date.now() - startTime > timeoutMs) {
         this.logger.warn('Failed to acquire operation lock (timeout)', { uid, timeoutMs });
         return null;
       }
-      // 等待一小段时间后重试，避免CPU空转
-      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // 等待锁释放后重试
+      await existingPromise.catch(() => {}); // 即使 promise 不被 reject 也等待
     }
-
-    // 创建新锁
-    let release: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    this.operationLocks.set(uid, lockPromise);
-
-    return () => {
-      this.operationLocks.delete(uid);
-      release();
-    };
   }
 
   /**
    * 判断记忆是否已归档
+   * 主要依据 palace.wingId 是否为 'archived'
+   *
+   * 注意：wingId 是归档状态的主要指示器，它反映了实际的文件存储位置。
+   * 'archived' 标签作为辅助检查存在，用于处理边缘情况（如操作中断）。
+   * 但标签可能不一致（如恢复操作只移除了标签但 wingId 未还原），
+   * 因此我们优先信任 wingId。
    */
   private isArchived(memory: MemoryMetaRecord): boolean {
-    // 通过 tags 判断或通过 scope 判断
-    return memory.tags?.includes('archived') ?? false;
+    // 主要判断：检查 palace 路径中的 wingId
+    // 如果 wingId 是 'archived'，说明已经迁移到归档区域
+    const isArchivedByPalace = memory.palace?.wingId === 'archived';
+
+    // 辅助判断：检查标签（仅在 wingId 判断不确定时参考）
+    // 注意：标签判断是次要的，因为恢复操作可能只移除了标签但 wingId 未还原
+    // 这种情况下应该以 wingId 为准
+    const hasArchivedTag = memory.tags?.includes('archived') ?? false;
+
+    // 如果 wingId 和标签不一致，以 wingId 为准（反映了实际存储位置）
+    // 只有当 wingId 是 'archived' 时才认为已归档
+    // 标签仅作为调试辅助，不用于归档判断
+    return isArchivedByPalace;
   }
 
   // ============================================================
@@ -871,10 +916,14 @@ export class MemoryDegradationManager {
         memory.version
       );
 
-      // 计算降级后的 importanceScore（按 0.8 系数衰减）
+      // 计算降级后的 importanceScore（按配置系数衰减）
+      // 使用 scopeDegradationDecayRate（配置值，默认 0.8）作为衰减乘数
+      // 降级时 importance * decayMultiplier，例如 importance=8, decayRate=0.8 → new=6.4
+      // 使用 Math.round 进行平滑衰减，而非 Math.floor（过于激进）
+      const decayMultiplier = getDegradationImportanceDecayRate();
       const degradedImportance = Math.max(
         1, // 最低保留下限
-        Math.floor(memory.importanceScore * 0.8)
+        Math.round(memory.importanceScore * decayMultiplier)
       );
 
       // 使用事务管理器确保原子性
@@ -909,8 +958,32 @@ export class MemoryDegradationManager {
           },
           rollback: async () => {
             try {
+              // 检查原文件是否存在，如果不存在（commit部分成功导致原文件被删除），需要先恢复
+              const oldExists = await this.palaceStore.exists(oldPalaceRef);
+              if (!oldExists) {
+                // 原文件已被删除（commit的deleteSourceOnly部分成功），从副本恢复
+                this.logger.warn('Old palace file missing during rollback, restoring from copy', {
+                  uid,
+                  oldPalaceRef,
+                  newPalaceRef,
+                });
+                try {
+                  await this.palaceStore.copy(newPalaceRef, oldPalaceRef);
+                } catch (restoreErr) {
+                  this.logger.error('CRITICAL: Failed to restore palace file from copy during rollback - manual intervention required', {
+                    uid,
+                    oldPalaceRef,
+                    newPalaceRef,
+                    error: String(restoreErr),
+                  });
+                  // 仍然尝试删除新文件
+                  await this.palaceStore.delete(newPalaceRef).catch(() => {});
+                  return;
+                }
+              }
+              // 删除副本文件
               await this.palaceStore.delete(newPalaceRef);
-              this.logger.debug('Palace downgrade migration rolled back', { uid, oldPalaceRef, newPalaceRef });
+              this.logger.debug('Palace downgrade migration rolled back successfully', { uid, oldPalaceRef, newPalaceRef });
             } catch (rollbackErr) {
               this.logger.error('CRITICAL: Palace downgrade rollback failed - manual intervention required', {
                 uid,
@@ -1278,47 +1351,115 @@ export class MemoryDegradationManager {
       });
 
       // 2. 并行迁移历史版本的 palace 文件
-      //    注意：并行执行，但全部在事务保护下
-      //    使用 copy + deleteSourceOnly 确保原子性
-      const movePromises = memory.versionChain.map(async (versionInfo) => {
-        const oldRef = versionInfo.palaceRef;
-        const newRef = this.generateArchivePalaceRef(oldRef);
-        try {
-          await this.palaceStore.copy(oldRef, newRef);
-          return { success: true, versionInfo, oldRef, newRef };
-        } catch (err) {
-          // 复制失败，保留原路径（文件可能已不存在）
-          this.logger.warn('Failed to archive version palace file, keeping original ref', { oldRef, error: String(err) });
-          return { success: false, versionInfo, oldRef, newRef, error: err };
-        }
-      });
+      //    注意：所有版本必须全部成功，否则归档操作失败并回滚
+      //    这是为了确保 versionChain 与实际文件的一致性
+      const versionRefsToMigrate = memory.versionChain.map(v => ({
+        versionInfo: v,
+        oldRef: v.palaceRef,
+        newRef: this.generateArchivePalaceRef(v.palaceRef),
+      }));
 
-      const results = await Promise.all(movePromises);
-
-      // 3. 收集成功迁移的版本引用
-      for (const result of results) {
-        if (result.success) {
-          allMigratedRefs.push({ oldRef: result.oldRef, newRef: result.newRef });
+      // 先预检查所有文件是否存在，提供早期警告
+      // 注意：即使预检查通过，prepare 阶段仍会再次验证（两阶段提交保证）
+      for (const ref of versionRefsToMigrate) {
+        const exists = await this.palaceStore.exists(ref.oldRef);
+        if (!exists) {
+          this.logger.warn('Version palace file not found during pre-check - archive will abort', { uid, oldRef: ref.oldRef });
         }
       }
 
-      // 4. 构建归档后的 versionChain
-      const archivedVersionChain: VersionInfo[] = results.map((result) => {
-        if (result.success) {
-          return { ...result.versionInfo, palaceRef: result.newRef };
-        } else {
-          return result.versionInfo;
-        }
+      // 收集所有需要归档的引用（包括当前版本）
+      const allRefsToMigrate = [
+        { oldRef: oldPalaceRef, newRef: archivePalaceRef },
+        ...versionRefsToMigrate.map(r => ({ oldRef: r.oldRef, newRef: r.newRef })),
+      ];
+
+      // 3. 构建归档后的 versionChain
+      //    注意：只有在 prepare 阶段成功复制文件的版本才更新到 archive 路径
+      //    这确保 versionChain 与实际文件的一致性
+      //    构建在事务提交后进行，使用 allMigratedRefs 中成功迁移的引用
+      //    格式: { oldRef: 原始路径, newRef: 归档路径 }
+      const archivedVersionChain: VersionInfo[] = memory.versionChain.map((v, idx) => {
+        const ref = versionRefsToMigrate[idx];
+        // 检查该版本是否被成功迁移（通过检查 oldRef 是否在 allMigratedRefs 中）
+        const wasMigrated = allMigratedRefs.some(m => m.oldRef === ref.oldRef);
+        // 只有成功迁移的版本才更新 palaceRef，否则保持原始路径
+        return {
+          ...v,
+          palaceRef: wasMigrated ? ref.newRef : v.palaceRef,
+          _archived: wasMigrated, // 内部标记，用于日志追踪
+        };
       });
 
-      // 5. 添加归档标签和原始 palaceRef 标签（用于恢复）
+      // 4. 在事务中注册版本文件的迁移操作（两阶段提交）
+      for (const ref of versionRefsToMigrate) {
+        const versionOldRef = ref.oldRef;
+        const versionNewRef = ref.newRef;
+        this.txManager.registerOperation(tx.id, {
+          layer: 'palace',
+          operation: 'update',
+          targetId: `${versionOldRef}:${versionNewRef}`,
+          prepare: async () => {
+            try {
+              // 检查源文件是否存在
+              const exists = await this.palaceStore.exists(versionOldRef);
+              if (!exists) {
+                // 文件不存在，标记为未迁移（不为 null 以保持数组索引对应）
+                // 注意：返回 false 以触发事务回滚，确保 versionChain 一致性
+                this.logger.error('Version palace file does not exist during archive prepare - aborting archive to maintain versionChain consistency', { uid, versionOldRef });
+                return false; // 阻塞归档流程，触发事务回滚
+              }
+              await this.palaceStore.copy(versionOldRef, versionNewRef);
+              allMigratedRefs.push({ oldRef: versionOldRef, newRef: versionNewRef });
+              return true;
+            } catch (copyErr) {
+              this.logger.error('Failed to prepare version palace migration', {
+                uid,
+                versionOldRef,
+                versionNewRef,
+                error: String(copyErr),
+              });
+              return false;
+            }
+          },
+          commit: async () => {
+            // 删除源文件（只在 prepare 成功后）
+            const exists = await this.palaceStore.exists(versionOldRef);
+            if (exists) {
+              await this.palaceStore.deleteSourceOnly(versionOldRef);
+            }
+          },
+          rollback: async () => {
+            try {
+              // 删除已复制的归档文件
+              const newExists = await this.palaceStore.exists(versionNewRef);
+              if (newExists) {
+                await this.palaceStore.delete(versionNewRef);
+              }
+              this.logger.debug('Version palace migration rolled back', { uid, versionOldRef, versionNewRef });
+            } catch (rollbackErr) {
+              this.logger.error('Failed to rollback version palace migration', {
+                uid,
+                versionOldRef,
+                versionNewRef,
+                error: String(rollbackErr),
+              });
+            }
+          },
+        });
+      }
+
+      // 5. 收集成功迁移的版本引用（为后续清理提供信息）
+      // 注意：由于事务的回滚机制，如果任何 prepare 失败，整个事务会回滚
+
+      // 6. 添加归档标签和原始 palaceRef 标签（用于恢复）
       const newTags = [
         ...(memory.tags || []),
         'archived',
         `originalPalaceRef:${oldPalaceRef}`,
       ];
 
-      // 6. 计算归档后的 palace location（wingId 替换为 "archived"）
+      // 7. 计算归档后的 palace location（wingId 替换为 "archived"）
       const archivedPalaceLocation: PalaceLocation = {
         wingId: 'archived',
         hallId: memory.palace.hallId,
@@ -1326,7 +1467,7 @@ export class MemoryDegradationManager {
         closetId: memory.palace.closetId,
       };
 
-      // 7. 注册 metaStore 更新操作
+      // 8. 注册 metaStore 更新操作
       this.txManager.registerOperation(tx.id, {
         layer: 'meta',
         operation: 'update',
@@ -1990,8 +2131,8 @@ export class MemoryDegradationManager {
       };
     }
 
-    // 计算 importance 强化幅度
-    const importanceBoost = this.calculateImportanceBoost(memory.importanceScore);
+    // 计算 importance 强化幅度（带时间衰减）
+    const importanceBoost = this.calculateImportanceBoost(memory.importanceScore, memory.lastRecalledAt);
 
     // 计算 scopeScore 强化幅度（仅当被其他Agent召回时）
     let scopeBoost = 0;
@@ -2030,6 +2171,27 @@ export class MemoryDegradationManager {
             importanceScore: memory.importanceScore,
             scopeScore: memory.scopeScore,
             lastRecalledAt: memory.lastRecalledAt ?? now,
+          });
+        },
+      });
+
+      // 注册 vectorStore 更新操作（与 MemoryRecallManager 保持一致）
+      txManager.registerOperation(tx.id, {
+        layer: 'vector',
+        operation: 'update',
+        targetId: uid,
+        commit: async () => {
+          await this.vectorStore.updateMetadata(uid, {
+            importanceScore: newImportance,
+            scopeScore: newScopeScore,
+          });
+        },
+        rollback: async () => {
+          // 回滚：恢复原始值
+          this.logger.warn('applyReinforcement vector 回滚：恢复原始评分', { uid });
+          await this.vectorStore.updateMetadata(uid, {
+            importanceScore: memory.importanceScore,
+            scopeScore: memory.scopeScore,
           });
         },
       });
@@ -2081,18 +2243,36 @@ export class MemoryDegradationManager {
 
   /**
    * 计算重要性强化幅度
+   * 时间衰减规则：
+   * - 距上次召回 < 1 小时：全额强化
+   * - 距上次召回 1-24 小时：衰减 50%
+   * - 距上次召回 > 24 小时：衰减 80%
    */
-  private calculateImportanceBoost(currentImportance: number): number {
+  private calculateImportanceBoost(currentImportance: number, lastRecalledAt?: number): number {
+    let boost: number;
     if (currentImportance < this.reinforcementConfig.lowBoostThreshold) {
-      return this.reinforcementConfig.lowBoost;
+      boost = this.reinforcementConfig.lowBoost;
+    } else if (currentImportance < this.reinforcementConfig.mediumBoostThreshold) {
+      boost = this.reinforcementConfig.mediumBoost;
+    } else if (currentImportance < this.reinforcementConfig.highBoostThreshold) {
+      boost = this.reinforcementConfig.highBoost;
+    } else {
+      boost = this.reinforcementConfig.defaultBoost;
     }
-    if (currentImportance < this.reinforcementConfig.mediumBoostThreshold) {
-      return this.reinforcementConfig.mediumBoost;
+
+    // 时间衰减（与 MemoryRecallManager 保持一致）
+    if (lastRecalledAt) {
+      const hoursSinceLastRecall = (Date.now() - lastRecalledAt) / (1000 * 60 * 60);
+      const cappedHours = Math.min(hoursSinceLastRecall, 48);
+      if (cappedHours > 24) {
+        boost = boost * 0.2;
+      } else if (cappedHours > 1) {
+        const decayRate = 0.5 - (cappedHours - 1) * (0.5 / 23);
+        boost = boost * Math.max(0.2, decayRate);
+      }
     }
-    if (currentImportance < this.reinforcementConfig.highBoostThreshold) {
-      return this.reinforcementConfig.highBoost;
-    }
-    return this.reinforcementConfig.defaultBoost;
+
+    return boost;
   }
 
   /**

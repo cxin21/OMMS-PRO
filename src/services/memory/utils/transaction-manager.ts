@@ -7,7 +7,7 @@
  * - 支持操作回滚
  */
 
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 
 export interface StorageOperation {
@@ -49,7 +49,7 @@ export class TransactionManager {
   private transactions: Map<string, Transaction>;
 
   constructor() {
-    this.logger = createLogger('TransactionManager');
+    this.logger = createServiceLogger('TransactionManager');
     this.transactions = new Map();
   }
 

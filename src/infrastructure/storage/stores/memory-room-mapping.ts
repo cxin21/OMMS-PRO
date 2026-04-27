@@ -9,7 +9,7 @@
  * @module storage/memory-room-mapping
  */
 
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
@@ -63,7 +63,7 @@ export class MemoryRoomMapping {
   private loadedRoomIds: Set<string> = new Set();
 
   constructor(private config: MemoryRoomMappingConfig) {
-    this.logger = createLogger('MemoryRoomMapping');
+    this.logger = createServiceLogger('MemoryRoomMapping');
   }
 
   /**

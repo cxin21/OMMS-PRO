@@ -15,7 +15,7 @@
  * - EpisodeStore: 情景内的空间组织
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
 export interface SpatialIndexConfig {
@@ -50,7 +50,7 @@ export class SpatialIndex {
   private dirty: boolean = false;  // 是否有未保存的更改
 
   constructor(userConfig: Partial<SpatialIndexConfig> = {}) {
-    this.logger = createLogger('SpatialIndex');
+    this.logger = createServiceLogger('SpatialIndex');
     this.config = {
       enabled: true,
       dimensions: 3,

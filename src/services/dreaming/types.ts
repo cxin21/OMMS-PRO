@@ -652,6 +652,8 @@ export interface DreamingEngineConfig {
     /** 日志目录 */
     directory: string;
   };
+  /** 主动学习配置 (v2.0.0) */
+  activeLearning?: ActiveLearningConfig;
 }
 
 /**

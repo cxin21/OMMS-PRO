@@ -27,8 +27,7 @@ import type {
 import { PalaceStore } from '../../../infrastructure/storage/stores/palace-store';
 import { IDGenerator } from '../../../shared/utils/id-generator';
 import { StringUtils } from '../../../shared/utils/string';
-import { createLogger } from '../../../shared/logging';
-import type { ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { MemoryVersionManager } from './memory-version-manager';
 import { TransactionManager } from '../utils/transaction-manager';
 import { GraphRetryQueue } from '../utils/graph-retry-queue';
@@ -36,6 +35,7 @@ import type { ILLMExtractor } from '../llm/llm-extractor';
 import { config } from '../../../shared/config';
 import type { MemoryStoreConfig } from '../../../core/types/config';
 import { deriveBlock, shouldUpgradeScope, getScopeUpgradeThresholds } from '../utils/block-utils';
+import { getExtractionTimeout } from '../utils/memory-config-utils';
 
 /**
  * MemoryStoreManager
@@ -70,7 +70,7 @@ export class MemoryStoreManager {
     this.palaceStore = palaceStore;
     this.graphStore = graphStore;
     this.embedder = embedder;
-    this.logger = createLogger('MemoryStoreManager');
+    this.logger = createServiceLogger('MemoryStoreManager');
     this.llmExtractor = llmExtractor;
 
     // 初始化事务管理器
@@ -274,15 +274,8 @@ export class MemoryStoreManager {
 
     const now = Date.now();
 
-    // 从配置获取 extraction timeout，默认 30000ms（来自 config.default.json）
-    const DEFAULT_EXTRACTION_TIMEOUT = 30000;
-    let extractionTimeout = DEFAULT_EXTRACTION_TIMEOUT;
-    if (config.isInitialized()) {
-      const captureConfig = config.getConfig<{ extractionTimeout?: number }>('memoryService.capture');
-      if (captureConfig?.extractionTimeout !== undefined) {
-        extractionTimeout = captureConfig.extractionTimeout;
-      }
-    }
+    // 使用 memory-config-utils 获取 extraction timeout
+    const extractionTimeout = getExtractionTimeout();
 
     // 用于 ORPHAN_VECTOR 恢复时复用已有记忆 ID
     // forcedMemoryId 优先级最高，表示强制创建新记忆（而非新版本）
@@ -509,10 +502,12 @@ export class MemoryStoreManager {
     // 6. Prepare vector document (with fallback on failure)
     const embeddingDimension = this.getEmbeddingDimension();
     let vector: number[];
+    let embeddingFailed = false;
     if (!this.embedder) {
       // Embedder 未配置，使用零向量
       this.logger.error('Embedder not configured, using zero vector - semantic search will not work for this memory', { memoryId });
       vector = new Array(embeddingDimension).fill(0);
+      embeddingFailed = true;
     } else {
       try {
         vector = await this.embedder(summary);
@@ -525,6 +520,7 @@ export class MemoryStoreManager {
         // 使用零向量作为 fallback，确保存储流程可以继续
         // 注意：这会导致相似度搜索失效，但不会阻止记忆存储
         vector = new Array(embeddingDimension).fill(0);
+        embeddingFailed = true;
       }
     }
     const vectorDoc: VectorDocument = {
@@ -546,6 +542,8 @@ export class MemoryStoreManager {
         isLatestVersion: true,
         versionGroupId: memoryId,
         summary,
+        // 标记嵌入失败，搜索时会跳过这些记忆或降低其权重
+        embeddingFailed,
       },
     };
 

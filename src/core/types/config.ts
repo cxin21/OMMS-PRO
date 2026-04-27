@@ -5,9 +5,9 @@
  * @module types/config
  */
 
-import type { MemoryType, MemoryScope } from '@core/types/memory/index';
+import type { MemoryType, MemoryScope, MemoryBlock } from '@core/types/memory/index';
 
-export type MemoryBlock = 'working' | 'session' | 'core' | 'archived' | 'deleted';
+export type { MemoryBlock } from '@core/types/memory/index';
 
 export type HallType = 'facts' | 'events' | 'decisions' | 'errors' | 'learnings' | 'relations';
 
@@ -380,12 +380,13 @@ export interface DreamingSchedulerConfig {
 export interface DreamingConsolidationConfig {
   similarityThreshold: number;
   maxGroupSize: number;
+  maxTagsPerMemory: number;
   preserveNewest: boolean;
   createNewVersion: boolean;
-  topicSimilarityThreshold?: number;
-  semanticCheckThreshold?: number;
-  vectorSearchLimit?: number;
-  candidateThreshold?: number;
+  topicSimilarityThreshold: number;
+  semanticCheckThreshold: number;
+  vectorSearchLimit: number;
+  candidateThreshold: number;
 }
 
 // ============================================================================
@@ -397,6 +398,7 @@ export interface DreamingReorganizationConfig {
   densityTarget: number;
   orphanThreshold: number;
   maxNewRelationsPerCycle: number;
+  minNewRelationSimilarity: number;
 }
 
 // ============================================================================
@@ -406,8 +408,14 @@ export interface DreamingReorganizationConfig {
 export interface DreamingArchivalConfig {
   importanceThreshold: number;
   stalenessDays: number;
-  archiveBlock: string;
+  archiveBlock: MemoryBlock;
   retentionDays: number;
+  archiveScoreThreshold: number;
+  archiveScoreWeights?: {
+    importanceWeight: number;
+    stalenessWeight: number;
+    recallWeight: number;
+  };
 }
 
 // ============================================================================

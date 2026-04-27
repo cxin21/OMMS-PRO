@@ -22,6 +22,7 @@ import { createFormatter } from './formatter';
  * 日志级别数值映射（用于比较）
  */
 const LEVEL_VALUES: Record<LogLevel, number> = {
+  trace: -1,   // 最详细
   debug: 0,
   info: 1,
   warn: 2,
@@ -74,7 +75,7 @@ export class Logger implements ILogger {
   private createInitialStats(): LogStats {
     return {
       totalEntries: 0,
-      byLevel: { debug: 0, info: 0, warn: 0, error: 0 },
+      byLevel: { trace: 0, debug: 0, info: 0, warn: 0, error: 0 },
       byModule: {},
       fileWrites: 0,
       consoleWrites: 0,
@@ -197,41 +198,41 @@ export class Logger implements ILogger {
    * @param context - 子日志器的上下文
    * @returns 新的日志器实例
    */
-  child(module: string, context?: LogContext): Logger {
+  child(module: string, context?: LogContext): ILogger {
     const fullModule = `${this.module}/${module}`;
     const mergedContext = context ? { ...this.context, ...context } : this.context;
-    
+
     return new Logger(fullModule, this.config, mergedContext);
   }
-  
+
   /**
    * 设置上下文
    */
   setContext(context: LogContext): void {
     this.context = { ...this.context, ...context };
+    for (const transport of this.transports) {
+      if ('setContext' in transport && typeof transport.setContext === 'function') {
+        (transport as any).setContext(context);
+      }
+    }
   }
-  
+
   /**
    * 清除上下文
    */
   clearContext(): void {
     this.context = {};
   }
-  
+
   /**
    * 获取统计信息
    */
   getStats(): LogStats {
     return { ...this.stats };
   }
-  
+
   /**
    * 内部日志方法
-   * 
-   * @param level - 日志级别
-   * @param message - 日志消息
-   * @param error - 错误对象
-   * @param data - 附加数据
    */
   protected log(
     level: LogLevel,
@@ -239,21 +240,17 @@ export class Logger implements ILogger {
     error?: Error,
     data?: Record<string, unknown>,
   ): void {
-    // 检查日志级别
     if (!this.shouldLog(level)) {
       return;
     }
-    
-    // 创建日志条目
+
     const entry = this.createEntry(level, message, error, data);
-    
-    // 写入传输
+
     this.writeToTransports(entry);
-    
-    // 更新统计
+
     this.updateStats(level);
   }
-  
+
   /**
    * 检查是否应该记录该级别的日志
    */
@@ -262,7 +259,7 @@ export class Logger implements ILogger {
     const entryLevel = LEVEL_VALUES[level];
     return entryLevel >= configLevel;
   }
-  
+
   /**
    * 创建日志条目
    */
@@ -282,7 +279,7 @@ export class Logger implements ILogger {
       error,
     };
   }
-  
+
   /**
    * 写入传输
    */
@@ -291,24 +288,25 @@ export class Logger implements ILogger {
       try {
         transport.write(entry);
       } catch (error) {
-        console.error('Error writing to transport:', error);
+        const msg = `[@omms/logger] Error writing to transport: ${error instanceof Error ? error.message : String(error)}\n`;
+        process.stderr.write(msg);
       }
     }
   }
-  
+
   /**
    * 更新统计信息
    */
   private updateStats(level: LogLevel): void {
     this.stats.totalEntries++;
     this.stats.byLevel[level]++;
-    
+
     if (!this.stats.byModule[this.module]) {
       this.stats.byModule[this.module] = 0;
     }
     this.stats.byModule[this.module]++;
   }
-  
+
   /**
    * 关闭日志器
    */
@@ -319,29 +317,43 @@ export class Logger implements ILogger {
   }
 
   /**
-   * 开始计时，返回结束函数
-   * 调用结束函数时自动记录操作耗时
+   * 开始计时，返回计时器对象
+   * 调用 end() 时自动记录操作耗时，调用 error() 记录错误
    *
    * @param operation - 操作名称
    * @param data - 附加数据
-   * @returns 结束计时的函数
+   * @returns 计时器对象，包含 end() 和 error() 方法
    *
    * @example
    * ```typescript
-   * const endTimer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
-   * // ... 执行操作 ...
-   * endTimer(); // 自动记录: "Operation completed: llm.extractMemories" + durationMs
+   * const timer = logger.startTimer('llm.extractMemories', { textLength: 1000 });
+   * try {
+   *   // ... 执行操作 ...
+   *   timer.end();
+   * } catch (error) {
+   *   timer.error(error as Error);
+   * }
    * ```
    */
-  startTimer(operation: string, data?: Record<string, unknown>): () => void {
+  startTimer(operation: string, data?: Record<string, unknown>): { end: () => void; error: (err: Error) => void } {
     const start = performance.now();
-    return () => {
-      const durationMs = Math.round(performance.now() - start);
-      this.info(`Operation completed: ${operation}`, {
-        ...data,
-        operation,
-        durationMs,
-      });
+    return {
+      end: () => {
+        const durationMs = Math.round(performance.now() - start);
+        this.info(`Operation completed: ${operation}`, {
+          ...data,
+          operation,
+          durationMs,
+        });
+      },
+      error: (err: Error) => {
+        const durationMs = Math.round(performance.now() - start);
+        this.error(`Operation failed: ${operation}`, err, {
+          ...data,
+          operation,
+          durationMs,
+        });
+      },
     };
   }
 }

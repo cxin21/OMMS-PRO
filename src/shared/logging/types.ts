@@ -7,13 +7,14 @@
 
 /**
  * 日志级别枚举
- * 
+ *
+ * trace - 最详细日志，用于追踪代码执行路径
  * debug - 调试信息，最详细的日志
  * info  - 一般信息，记录正常运行状态
  * warn  - 警告信息，需要注意但不影响运行
  * error - 错误信息，需要立即处理
  */
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 /**
  * 日志输出目标
@@ -177,13 +178,13 @@ export interface ILogger {
   clearContext(): void;
 
   /**
-   * 开始计时，返回结束函数
-   * 调用结束函数时自动记录操作耗时
+   * 开始计时，返回计时器对象
+   * 调用 end() 时自动记录操作耗时，调用 error() 记录错误
    * @param operation - 操作名称
    * @param data - 附加数据
-   * @returns 结束计时的函数
+   * @returns 计时器对象，包含 end() 和 error() 方法
    */
-  startTimer(operation: string, data?: Record<string, unknown>): () => void;
+  startTimer(operation: string, data?: Record<string, unknown>): { end: () => void; error: (err: Error) => void };
 }
 
 /**

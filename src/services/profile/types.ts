@@ -49,6 +49,44 @@ export interface Persona {
 }
 
 /**
+ * 用户身份信息（Identity）
+ * v2.0.0: 描述用户的基本身份信息，与 Persona 不同，Identity 是更客观的基础信息
+ */
+export interface Identity {
+  id: string;
+  userId: string;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+
+  // 基本身份信息
+  name?: string;           // 姓名/昵称
+  age?: string;            // 年龄
+  gender?: string;         // 性别
+  occupation?: string;     // 职业
+  location?: string;       // 位置/地区
+  timezone?: string;       // 时区
+  language?: string;       // 主要语言
+
+  // 联系信息
+  email?: string;          // 邮箱（如果已验证）
+  preferredContact?: string; // 首选联系方式
+
+  // 组织信息
+  organization?: string;    // 所属组织/公司
+  role?: string;           // 角色/职位
+
+  // 元数据
+  confidence: number;      // 信息置信度
+  sources: string[];        // 信息来源
+  tags: string[];           // 标签
+
+  // 版本历史
+  previousVersionId?: string;
+  changeSummary?: string;
+}
+
+/**
  * 性格特征
  */
 export interface PersonalityTrait {

@@ -6,7 +6,7 @@
  * - 保留分析组件用于从记忆构建画像
  */
 
-import { createLogger, type ILogger } from '../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../shared/logging';
 import { config } from '../../shared/config';
 import { PersonaBuilder } from './persona/persona-builder';
 import type { ConversationTurn } from './persona/persona-builder';
@@ -16,7 +16,7 @@ import { TagManager } from './interaction/tag-manager';
 import { PrivacyManager } from './privacy-manager';
 import { ProfileCache } from './profile-cache';
 import type { StorageMemoryService } from '../memory/core/storage-memory-service';
-import type { ILLMExtractor } from '../memory/llm/llm-extractor';
+import type { ILLMExtractor, LLMScoringResult } from '../memory/llm/llm-extractor';
 import { MemoryType, MemoryScope, MemoryBlock } from '../../core/types/memory';
 import type {
   Persona,
@@ -35,6 +35,7 @@ import type {
   TagCategory,
   TagSource,
   ProfileManagerConfig,
+  Identity,
 } from './types';
 
 export interface ProfileManagerOptions {
@@ -61,17 +62,35 @@ export class ProfileManager {
   private config: Required<ProfileManagerConfig>;
 
   constructor(options?: ProfileManagerOptions) {
-    this.logger = createLogger('profile-manager');
+    this.logger = createServiceLogger('ProfileManager');
 
-    // 获取缓存配置（必须从 ConfigManager 获取，不提供默认值）
-    const memoryServiceConfig = config.getConfigOrThrow<{ maxSize: number; ttl: number }>('memoryService.cache');
-    const cacheSize = memoryServiceConfig.maxSize;
-    const cacheTtl = memoryServiceConfig.ttl;
+    // 获取缓存配置（必须从 ConfigManager 获取，检查初始化状态）
+    let cacheSize = 1000;  // 默认值
+    let cacheTtl = 3600000;  // 默认值 1小时
 
-    // 配置管理
-    // 从 ConfigManager 获取存储路径
-    const storageConfig = config.getConfigOrThrow<{ profileDbPath: string }>('memoryService.storage');
-    const profileDbPath = storageConfig.profileDbPath;
+    if (config.isInitialized()) {
+      try {
+        const memoryServiceConfig = config.getConfigOrThrow<{ maxSize: number; ttl: number }>('memoryService.cache');
+        cacheSize = memoryServiceConfig.maxSize;
+        cacheTtl = memoryServiceConfig.ttl;
+      } catch (e) {
+        this.logger.warn('Failed to load memoryService.cache config, using defaults', { error: String(e) });
+      }
+    } else {
+      this.logger.warn('ConfigManager not initialized, using default cache config');
+    }
+
+    // 配置管理 - 从 ConfigManager 获取存储路径
+    let profileDbPath = './data/profile.db';  // 默认值
+
+    if (config.isInitialized()) {
+      try {
+        const storageConfig = config.getConfigOrThrow<{ profileDbPath: string }>('memoryService.storage');
+        profileDbPath = storageConfig.profileDbPath;
+      } catch (e) {
+        this.logger.warn('Failed to load memoryService.storage config, using defaults', { error: String(e) });
+      }
+    }
 
     this.config = {
       storage: {
@@ -184,6 +203,8 @@ export class ProfileManager {
           this.logger.warn('Failed to parse persona from memory', { memoryId: latestMemory.uid });
         }
       }
+    } else {
+      this.logger.warn('MemoryService not available for getPersona, profile data unavailable', { userId });
     }
 
     return undefined;
@@ -192,35 +213,28 @@ export class ProfileManager {
   /**
    * 从 MemoryService 获取指定类型的记忆
    * v2.0.0: 使用 recall 方法查询记忆
+   *
+   * 注意：使用 agentId 和 types 过滤，不再依赖语义搜索（query）
+   * 这样可以准确找到所有属于指定用户和类型的记忆，而不是依赖语义相似度
    */
   private async getMemoriesByType(userId: string, type: MemoryType): Promise<Array<{ uid: string; content: string; updatedAt: number }>> {
     if (!this.memoryService) {
+      this.logger.warn('MemoryService not available for getMemoriesByType', { userId, type });
       return [];
     }
 
     try {
-      // 使用 MemoryService 的 recall 方法查询记忆
-      // 根据类型选择合适的查询词，提高向量搜索效果
-      const typeQueryMap: Record<MemoryType, string> = {
-        [MemoryType.PERSONA]: 'user persona personality profile',
-        [MemoryType.PREFERENCE]: 'user preference settings configuration',
-        [MemoryType.IDENTITY]: 'user identity information profile',
-        [MemoryType.FACT]: 'fact information knowledge',
-        [MemoryType.EVENT]: 'event experience occurrence',
-        [MemoryType.DECISION]: 'decision choice judgment',
-        [MemoryType.ERROR]: 'error mistake problem',
-        [MemoryType.LEARNING]: 'learning insight knowledge',
-        [MemoryType.RELATION]: 'relation connection relationship',
-      };
-      const queryText = typeQueryMap[type] || type;
-
+      // 使用 agentId 和 types 进行精确过滤，不再依赖语义搜索
+      // 传入 agentId 让 recall 在存储层过滤，避免语义搜索遗漏
+      // 不传 query 可以避免不必要的 LLM 调用和向量搜索，直接按类型和 agentId 过滤
       const result = await this.memoryService.recall({
-        query: queryText,
-        types: [type],
+        agentId: userId,  // 按 agentId 精确过滤
+        types: [type],    // 按类型过滤
         limit: 100,
       });
 
-      // 过滤出属于当前用户的记忆
+      // 由于已经在存储层按 agentId 过滤，不需要再次过滤
+      // 但为安全起见保留（防止存储层过滤失效）
       const filteredMemories = result.memories.filter(m => m.agentId === userId);
 
       return filteredMemories.map(m => ({
@@ -314,7 +328,7 @@ export class ProfileManager {
       try {
         const scores = await this.llmExtractor.generateScores(persona.name + ' ' + JSON.stringify(persona));
         importance = scores.importance;
-        scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
+        scopeScore = scores.scopeScore;
       } catch (error) {
         this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
         importance = 8;  // Persona 默认高重要性
@@ -372,6 +386,89 @@ export class ProfileManager {
     }
 
     return undefined;
+  }
+
+  /**
+   * 获取用户身份信息
+   * v2.0.0: 从 MemoryService 获取 IDENTITY 记忆
+   */
+  async getIdentity(userId: string, version?: number): Promise<Identity | undefined> {
+    // v2.0.0: 从 MemoryService 获取 IDENTITY 记忆
+    if (this.memoryService) {
+      const memories = await this.getMemoriesByType(userId, MemoryType.IDENTITY);
+      if (memories.length > 0) {
+        // 找到最新的 identity 记忆
+        const latestMemory = memories.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        try {
+          const identity = JSON.parse(latestMemory.content) as Identity;
+          if (!version || identity.version === version) {
+            return identity;
+          }
+        } catch (e) {
+          this.logger.warn('Failed to parse identity from memory', { memoryId: latestMemory.uid });
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * 设置用户身份信息
+   * v2.0.0: 保存到 MemoryService 作为 IDENTITY 记忆
+   */
+  async setIdentity(userId: string, identity: Identity): Promise<void> {
+    await this.saveIdentityToMemory(userId, identity);
+    this.logger.info('Identity set for user', { userId });
+  }
+
+  /**
+   * v2.0.0: 保存 Identity 到 MemoryService 作为 IDENTITY 记忆
+   * IDENTITY 类型永不遗忘，importance 和 scopeScore 使用最高值
+   */
+  private async saveIdentityToMemory(userId: string, identity: Identity): Promise<void> {
+    if (!this.memoryService) {
+      this.logger.warn('MemoryService not available, identity not saved to memory');
+      return;
+    }
+
+    // IDENTITY 类型使用高重要性评分确保永不遗忘
+    // 即使 LLM 评分较低，也使用保护值
+    let importance: number;
+    let scopeScore: number;
+
+    if (this.llmExtractor) {
+      try {
+        const scores = await this.llmExtractor.generateScores(JSON.stringify(identity));
+        importance = Math.max(scores.importance, 8);  // 确保最低 8
+        scopeScore = Math.max(scores.scopeScore, 8);
+      } catch (error) {
+        this.logger.warn('LLM scoring failed for identity, using protected scores', { error: String(error) });
+        importance = 9;  // Identity 默认高重要性（保护级）
+        scopeScore = 9;
+      }
+    } else {
+      this.logger.debug('LLM Extractor not available, using protected scores for identity');
+      importance = 9;  // Identity 默认高重要性（保护级）
+      scopeScore = 9;
+    }
+
+    await this.memoryService.store(
+      {
+        content: JSON.stringify(identity),
+        type: MemoryType.IDENTITY,
+        metadata: {
+          agentId: userId,
+          subject: identity.name ?? userId,
+          tags: ['identity', `v${identity.version}`],
+        },
+      },
+      {
+        importance,
+        scopeScore,
+      }
+    );
+    this.logger.debug('Identity saved to MemoryService', { userId, importance, scopeScore });
   }
 
   async setPreference(
@@ -451,7 +548,7 @@ export class ProfileManager {
       try {
         const scores = await this.llmExtractor.generateScores(JSON.stringify(preferences));
         importance = scores.importance;
-        scopeScore = (scores as any).scopeScore ?? (scores as any).scope;
+        scopeScore = scores.scopeScore;
       } catch (error) {
         this.logger.warn('LLM scoring failed, using default scores', { error: String(error) });
         importance = 7;  // Preferences 默认重要性
@@ -749,10 +846,24 @@ export class ProfileManager {
     userId: string,
     confirm: boolean = false
   ): Promise<void> {
+    // 隐私标记清理
     this.privacyManager.deleteUserData(userId, { confirm });
-    
+
+    // 删除记忆数据
+    if (this.memoryService) {
+      await this.memoryService.deleteUserData(userId);
+    }
+
+    // 删除交互记录
+    await this.interactionRecorder.deleteUserData(userId);
+
+    // 删除标签
+    await this.tagManager.deleteUserData(userId);
+
     // 清除所有缓存
     this.cache.invalidateUser(userId);
+
+    this.logger.info('User data deletion completed', { userId });
   }
 
   /**

@@ -9,7 +9,7 @@
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import type { IEpisodeStore } from '../core/types';
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { config } from '../../../shared/config';
 
@@ -58,7 +58,7 @@ export class EpisodeStore implements IEpisodeStore {
       this.config = getEpisodeStoreConfig();
     }
     this.dbPath = join(this.config.storagePath, this.config.dbName);
-    this.logger = createLogger('EpisodeStore', { enabled: true });
+    this.logger = createServiceLogger('EpisodeStore');
   }
 
   /**

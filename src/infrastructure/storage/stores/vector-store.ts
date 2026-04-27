@@ -11,7 +11,7 @@ import type {
   VectorSearchOptions,
   VectorSearchResult,
 } from '../core/types';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
 interface VectorStoreConfig {
@@ -32,7 +32,7 @@ export class VectorStore implements IVectorStore {
   private config: VectorStoreConfig;
 
   constructor(userConfig?: Partial<VectorStoreConfig>) {
-    this.logger = createLogger('VectorStore', { enabled: true });
+    this.logger = createServiceLogger('VectorStore');
     this.db = null;
     this.table = null;
     this.initialized = false;

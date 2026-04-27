@@ -54,9 +54,12 @@ export function createGraphRoutes(deps: GraphRoutesDeps): Router {
         params.push(`%${entity}%`);
       }
       // Filter by memoryId - check if the memory ID is in the JSON array
+      // 使用参数化查询防止 SQL 注入，同时处理 JSON 数组中的引号转义
       if (memoryId) {
         conditions.push('memoryIds LIKE ?');
-        params.push(`%"${memoryId}"%`);
+        // 对 memoryId 进行转义处理，防止特殊字符导致 LIKE 模式匹配错误
+        const escapedMemoryId = memoryId.replace(/[%_"\\]/g, (c) => `\\${c}`);
+        params.push(`%"${escapedMemoryId}"%`);
       }
 
       if (conditions.length > 0) {
@@ -69,6 +72,7 @@ export function createGraphRoutes(deps: GraphRoutesDeps): Router {
       const total = countResult?.cnt ?? 0;
 
       // Add pagination
+      // safeLimit 和 safeOffset 已在上面验证为安全整数，使用直接插值是安全的
       sql += ` ORDER BY updatedAt DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
       const rows: any[] = graphStore.db.prepare(sql).all(...params);
 

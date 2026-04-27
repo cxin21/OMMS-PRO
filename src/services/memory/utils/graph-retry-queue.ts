@@ -13,7 +13,7 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import type { GraphNodeRecord, GraphEdgeRecord } from '../../../infrastructure/storage/core/types';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
@@ -97,7 +97,7 @@ export class GraphRetryQueue {
       this.config = { maxRetries, retryDelayMs };
     }
 
-    this.logger = createLogger('GraphRetryQueue');
+    this.logger = createServiceLogger('GraphRetryQueue');
 
     // 从 ConfigManager 获取路径配置
     if (userConfig?.queueFilePath && userConfig?.dlqFilePath) {

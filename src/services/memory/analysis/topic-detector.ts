@@ -7,7 +7,7 @@
  * - 配置通过 ConfigManager 注入
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import type { MemoryTopicConfig } from '../../../core/types/config';
 
@@ -61,7 +61,7 @@ export class TopicDetector {
   private topicHistory: Map<string, TopicHistory>;  // sessionId -> last topic
 
   constructor(config?: Partial<TopicDetectorConfig>) {
-    this.logger = createLogger('TopicDetector');
+    this.logger = createServiceLogger('TopicDetector');
     const defaultConfig = getDefaultConfig();
     this.config = config ? { ...defaultConfig, ...config } : defaultConfig;
     this.topicHistory = new Map();

@@ -529,6 +529,17 @@ async function startServer(): Promise<void> {
   // 使用 Express app 挂载 API（与 UnifiedServer 一致）
   app.use('/api', apiServer.getApp());
 
+  // 提供 Web UI 静态文件
+  const pathModule = await import('path');
+  const webUIPath = pathModule.join(process.cwd(), 'dist/web-ui');
+  app.use(express.static(webUIPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(pathModule.join(webUIPath, 'index.html'), (err) => {
+      if (err) next();
+    });
+  });
+
   // 启动 HTTP 服务器
   const http = await import('http');
   const server = http.createServer(app);

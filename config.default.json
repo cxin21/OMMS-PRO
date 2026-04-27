@@ -72,7 +72,14 @@
     "output": "file",
     "filePath": "./logs/omms.log",
     "maxSize": 10485760,
-    "maxFiles": 5
+    "maxFiles": 5,
+    "services": {
+      "MemoryCaptureService": "./logs/memory-capture.log",
+      "MemoryRecallManager": "./logs/memory-recall.log",
+      "DreamingManager": "./logs/dreaming.log",
+      "LLMExtractor": "./logs/llm-extractor.log",
+      "ProfileManager": "./logs/profile.log"
+    }
   },
   "memoryService": {
     "enabled": true,
@@ -114,13 +121,7 @@
       "archiveThreshold": 3,
       "deleteThreshold": 1,
       "maxInactiveDays": 90,
-      "protectLevel": 7,
-      "scoringWeights": {
-        "importanceWeight": 0.5,
-        "accessCountWeight": 0.3,
-        "recencyWeight": 0.2,
-        "accessCountNormalizer": 10
-      }
+      "protectLevel": 7
     },
     "scopeDegradation": {
       "enabled": true,
@@ -129,7 +130,8 @@
       "globalToAgentDays": 365,
       "sessionUpgradeRecallThreshold": 5,
       "agentUpgradeRecallThreshold": 10,
-      "upgradeScopeScoreMax": 10
+      "upgradeScopeScoreMax": 10,
+      "agentToGlobalImportance": 7
     },
     "reinforcement": {
       "enabled": true,
@@ -296,18 +298,18 @@
       "graphBasePath": "./data",
       "profileDbPath": "./data/profile.db",
       "dreamReportsDbPath": "./data/graph/dream_reports.db",
+      "interactionDbPath": "./data/interactions.db",
       "graphProcessorIntervalMs": 30000,
       "tagDbPath": "./data/tags.db"
     },
     "profileService": {
-      "maxTagsPerUser": 50
+      "maxTagsPerUser": 50,
+      "preferenceInferer": {
+        "minInteractions": 10,
+        "confidenceThreshold": 0.6,
+        "decayFactor": 0.9
+      }
     }
-  },
-  "streaming": {
-    "maxEventsPerStream": 1000,
-    "maxStreams": 100,
-    "maxSubscriptionsPerClient": 10,
-    "streamRetentionMs": 3600000
   },
   "embedding": {
     "model": "text-embedding-3-small",
@@ -376,17 +378,6 @@
       },
       "highValueImportanceThreshold": 7,
       "lowValueImportanceThreshold": 3
-    }
-  },
-  "multiAgent": {
-    "enabled": false,
-    "namespaceIsolation": false,
-    "federationEnabled": false,
-    "agents": {
-      "heartbeatTimeoutMs": 60000,
-      "heartbeatIntervalMs": 15000,
-      "maxMissedHeartbeats": 3,
-      "cleanupIntervalMs": 300000
     }
   }
 }

@@ -27,7 +27,7 @@ import type {
 import { PalaceStore } from '../../../infrastructure/storage/stores/palace-store';
 import { IDGenerator } from '../../../shared/utils/id-generator';
 import { StringUtils } from '../../../shared/utils/string';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import { TransactionManager } from '../utils/transaction-manager';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
@@ -137,7 +137,7 @@ export class MemoryVersionManager {
         ...userConfig,
       };
     }
-    this.logger = createLogger('MemoryVersionManager');
+    this.logger = createServiceLogger('MemoryVersionManager');
     this.logger.info('MemoryVersionManager initialized', { config: this.config });
 
     this.cache = cache;

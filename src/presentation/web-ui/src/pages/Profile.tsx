@@ -126,7 +126,7 @@ export default function Profile() {
               <span className="card-title"><User size={15} /> 用户人格 (Persona)</span>
               {!editingPersona ? (
                 <button className="btn btn-secondary btn-sm" onClick={() => {
-                  setPersonaDraft({ name: persona?.name, description: persona?.description, traits: persona?.traits })
+                  setPersonaDraft({ name: persona?.name, background: persona?.background, personalityTraits: persona?.personalityTraits ?? [] })
                   setEditingPersona(true)
                 }}>
                   <Edit2 size={13} /> 编辑
@@ -148,8 +148,8 @@ export default function Profile() {
                   <input className="form-input" value={personaDraft.name ?? ''} onChange={e => setPersonaDraft(d => ({ ...d, name: e.target.value }))} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">描述</label>
-                  <textarea className="form-textarea" rows={3} value={personaDraft.description ?? ''} onChange={e => setPersonaDraft(d => ({ ...d, description: e.target.value }))} />
+                  <label className="form-label">背景描述</label>
+                  <textarea className="form-textarea" rows={3} value={personaDraft.background ?? ''} onChange={e => setPersonaDraft(d => ({ ...d, background: e.target.value }))} />
                 </div>
               </div>
             ) : persona ? (
@@ -164,18 +164,18 @@ export default function Profile() {
                     <div style={{ fontWeight: 600 }}>v{persona.version ?? 1}</div>
                   </div>
                 </div>
-                {persona.description && (
+                {persona.background && (
                   <div style={{ marginBottom: 'var(--space-4)' }}>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: 4 }}>描述</div>
-                    <p style={{ fontSize: '0.875rem' }}>{persona.description}</p>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: 4 }}>背景描述</div>
+                    <p style={{ fontSize: '0.875rem' }}>{persona.background}</p>
                   </div>
                 )}
-                {persona.traits && persona.traits.length > 0 && (
+                {persona.personalityTraits && persona.personalityTraits.length > 0 && (
                   <div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: 8 }}>特质标签</div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {persona.traits.map(t => (
-                        <span key={t} className="badge badge-purple">{t}</span>
+                      {persona.personalityTraits.map((t, idx: number) => (
+                        <span key={idx} className="badge badge-purple">{t.trait}</span>
                       ))}
                     </div>
                   </div>

@@ -60,7 +60,7 @@ export function createScoringTools(memoryService: StorageMemoryService): Array<{
                 type: 'text',
                 text: `评分结果：\n` +
                   `- 重要性：${scores.importance}/10\n` +
-                  `- 作用域：${scores.scope}/10\n` +
+                  `- 作用域：${scores.scopeScore}/10\n` +
                   `- 置信度：${(scores.confidence * 100).toFixed(1)}%\n` +
                   `- 推理：${scores.reasoning}`,
               }],

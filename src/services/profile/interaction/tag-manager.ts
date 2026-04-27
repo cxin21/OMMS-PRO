@@ -4,7 +4,7 @@
  * v3.0.0: SQLite 持久化支持
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import type {
   UserTag,
   TagCategory,
@@ -39,12 +39,13 @@ export class TagManager {
   private initPromise: Promise<void> | null = null;
 
   constructor(options?: TagManagerOptions) {
-    this.logger = createLogger('tag-manager');
+    this.logger = createServiceLogger('TagManager');
 
     // Try to read profileService config from ConfigManager
+    // 注意：profileService 是顶层配置，不是 memoryService.profileService
     let maxTags = 50;
     try {
-      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('memoryService.profileService');
+      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('profileService');
       if (profileConfig) {
         maxTags = profileConfig.maxTagsPerUser ?? maxTags;
       }
@@ -379,6 +380,29 @@ export class TagManager {
     this.logger.debug(`Updated confidence of tag ${tagId} to ${confidence}`);
 
     return tag;
+  }
+
+  /**
+   * 删除用户所有标签数据
+   * v3.0.0: 用于 GDPR 等数据删除场景
+   */
+  async deleteUserData(userId: string): Promise<void> {
+    await this.ensureInitialized();
+
+    // 从内存 Map 删除
+    this.tags.delete(userId);
+
+    // 从 SQLite 删除
+    if (this.db) {
+      try {
+        this.db.prepare('DELETE FROM user_tags WHERE userId = ?').run(userId);
+      } catch (error) {
+        this.logger.error('Failed to delete tags from SQLite', { userId, error });
+        throw error;
+      }
+    }
+
+    this.logger.debug('Deleted all tags for user', { userId });
   }
 
   /**

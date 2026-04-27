@@ -12,7 +12,7 @@
  * - 统一主记忆选择策略（综合重要性、创建时间、访问频率）
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { TransactionCoordinator } from '../../memory/utils/transaction-manager';
 import type { StorageMemoryService } from '../../memory/core/storage-memory-service';
 import type { ILLMExtractor } from '../../memory/llm/llm-extractor';
@@ -50,7 +50,7 @@ export class MemoryMerger {
     config?: Partial<ConsolidationConfig>,
     private llmExtractor?: ILLMExtractor
   ) {
-    this.logger = createLogger('dreaming-engine', { module: 'memory-merger' });
+    this.logger = createServiceLogger('MemoryMerger');
 
     // 默认配置 - 从 config 读取，不允许硬编码
     this.config = {

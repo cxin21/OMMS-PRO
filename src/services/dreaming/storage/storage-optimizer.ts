@@ -6,7 +6,7 @@
  * @since v2.0.0
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { TransactionCoordinator } from '../../memory/utils/transaction-manager';
 import type { StorageMemoryService } from '../../memory/core/storage-memory-service';
 import type {
@@ -48,7 +48,7 @@ export class StorageOptimizer {
     archivalConfig?: Partial<ArchivalConfig>,
     defragConfig?: Partial<DefragmentationConfig>
   ) {
-    this.logger = createLogger('dreaming-engine', { module: 'storage-optimizer' });
+    this.logger = createServiceLogger('StorageOptimizer');
 
     // 默认归档配置
     this.archivalConfig = {

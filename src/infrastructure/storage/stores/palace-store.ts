@@ -11,7 +11,7 @@
 import { promises as fs } from 'fs';
 import { join, dirname, basename, isAbsolute, resolve } from 'path';
 import type { IPalaceStore, PalaceMetadata, PalaceRecord, PalaceLocation } from '../core/types';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { FileUtils } from '../../../shared/utils/file';
 import { config } from '../../../shared/config';
 
@@ -27,7 +27,7 @@ export class PalaceStore implements IPalaceStore {
 
   constructor(userConfig?: Partial<{ storagePath: string }>) {
     this.config = { storagePath: userConfig?.storagePath ?? '' };
-    this.logger = createLogger('PalaceStore', { enabled: true });
+    this.logger = createServiceLogger('PalaceStore');
     this.initialized = false;
   }
 
@@ -184,15 +184,26 @@ export class PalaceStore implements IPalaceStore {
 
     if (palaceRefs.length === 0) return new Map();
 
+    // 过滤无效的 palaceRef（null、undefined、空字符串）
+    const validRefs = palaceRefs.filter((ref): ref is string => {
+      if (!ref || typeof ref !== 'string' || ref.trim().length === 0) {
+        this.logger.debug('Skipping invalid palaceRef in retrieveMany', { invalidRef: ref });
+        return false;
+      }
+      return true;
+    });
+
+    if (validRefs.length === 0) return new Map();
+
     // 并行检索所有记录（优化 N+1 查询）
     const resultsArray = await Promise.all(
-      palaceRefs.map(palaceRef => this.retrieve(palaceRef))
+      validRefs.map(palaceRef => this.retrieve(palaceRef))
     );
 
     const results = new Map<string, string>();
     resultsArray.forEach((content, i) => {
       if (content) {
-        results.set(palaceRefs[i], content);
+        results.set(validRefs[i], content);
       }
     });
 
@@ -207,12 +218,23 @@ export class PalaceStore implements IPalaceStore {
 
     if (palaceRefs.length === 0) return;
 
+    // 过滤无效的 palaceRef（null、undefined、空字符串）
+    const validRefs = palaceRefs.filter((ref): ref is string => {
+      if (!ref || typeof ref !== 'string' || ref.trim().length === 0) {
+        this.logger.debug('Skipping invalid palaceRef in deleteMany', { invalidRef: ref });
+        return false;
+      }
+      return true;
+    });
+
+    if (validRefs.length === 0) return;
+
     // 并行删除所有记录（优化 N+1 查询）
     await Promise.all(
-      palaceRefs.map(palaceRef => this.delete(palaceRef))
+      validRefs.map(palaceRef => this.delete(palaceRef))
     );
 
-    this.logger.debug('Palace records batch deleted', { count: palaceRefs.length });
+    this.logger.debug('Palace records batch deleted', { count: validRefs.length });
   }
 
   /**

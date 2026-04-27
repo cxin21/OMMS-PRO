@@ -7,7 +7,7 @@
  * - 配置通过 ConfigManager 注入
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import type { MemorySentimentConfig } from '../../../core/types/config';
 import { PromptLoader } from '../../../shared/prompts';
@@ -116,7 +116,7 @@ export class SentimentAnalyzer {
   private promptLoader = PromptLoader.getInstance();
 
   constructor(config?: Partial<SentimentAnalyzerConfig>) {
-    this.logger = createLogger('SentimentAnalyzer');
+    this.logger = createServiceLogger('SentimentAnalyzer');
     const defaultConfig = getDefaultConfig();
     this.config = config ? { ...defaultConfig, ...config } : defaultConfig;
     this.logger.info('SentimentAnalyzer initialized', { config: this.config });

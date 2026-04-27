@@ -6,7 +6,7 @@
  * 注意：必须使用 LLM 进行特征提取，不接受其他方式
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import type { ILLMExtractor } from '../../memory/llm/llm-extractor';
 import { PromptLoader } from '../../../shared/prompts';
 import type {
@@ -55,7 +55,7 @@ export class PersonaBuilder {
   private promptLoader = PromptLoader.getInstance();
 
   constructor(options?: PersonaBuilderOptions, llmExtractor?: ILLMExtractor) {
-    this.logger = createLogger('persona-builder');
+    this.logger = createServiceLogger('PersonaBuilder');
     this.options = {
       minConversationTurns: options?.minConversationTurns ?? 5,
       updateThreshold: options?.updateThreshold ?? 0.3,

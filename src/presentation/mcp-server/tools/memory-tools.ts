@@ -194,7 +194,8 @@ export function createMemoryTools(memoryService: StorageMemoryService): Array<{ 
         },
         handler: async (params) => {
           try {
-            await memoryService.delete(params.memoryId);
+            // 使用 deleteMemory 而非 delete，确保完整生命周期清理（包括所有版本）
+            await memoryService.deleteMemory(params.memoryId);
 
             return {
               content: [{ type: 'text', text: `记忆删除成功：${params.memoryId}` }],

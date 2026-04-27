@@ -7,7 +7,7 @@
  * - 配置通过 ConfigManager 注入
  */
 
-import { createLogger, type ILogger } from '../../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { IDGenerator } from '../../../shared/utils/id-generator';
 import { PromptLoader } from '../../../shared/prompts';
 import type { StorageMemoryService } from '../core/storage-memory-service';
@@ -20,7 +20,7 @@ import type {
   EpisodeRecord,
   MemoryMetaRecord,
 } from '../../../infrastructure/storage/core/types';
-import { MemoryType } from '../../../core/types/memory';
+import { MemoryType, PROFILE_TYPES } from '../../../core/types/memory';
 import type { RecallMemory } from '../recall/memory-recall-manager';
 import type { SentimentResult } from '../analysis/sentiment-analyzer';
 import { SentimentAnalyzer } from '../analysis/sentiment-analyzer';
@@ -30,9 +30,6 @@ import type { MemoryConsolidationConfig } from '../../../core/types/config';
 
 // Keep local interface for backward compatibility
 export type ConsolidationConfig = MemoryConsolidationConfig;
-
-// Profile types that should never be forgotten or merged
-const PROFILE_TYPES: MemoryType[] = [MemoryType.IDENTITY, MemoryType.PERSONA, MemoryType.PREFERENCE];
 
 export interface ConsolidationTask {
   uid: string;
@@ -86,7 +83,7 @@ export class ConsolidationManager {
     userConfig?: Partial<MemoryConsolidationConfig>,
     llmExtractor?: ILLMExtractor
   ) {
-    this.logger = createLogger('ConsolidationManager');
+    this.logger = createServiceLogger('ConsolidationManager');
 
     // 如果传入了配置则使用，否则从 ConfigManager 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
@@ -310,7 +307,7 @@ export class ConsolidationManager {
     const candidates = memories
       .filter(m => {
         // 排除 Profile 类型
-        if (PROFILE_TYPES.includes(m.type as MemoryType)) {
+        if ((PROFILE_TYPES as readonly MemoryType[]).includes(m.type)) {
           return false;
         }
         // 召回次数阈值
@@ -496,19 +493,23 @@ export class ConsolidationManager {
     const content = await this.palaceStore.retrieve(memory.currentPalaceRef);
     if (!content) return false;
 
-    // 生成压缩摘要（这里简化处理，实际应该调用 LLM）
+    // 生成压缩摘要
     const compressedSummary = await this.generateCompressedSummary(content, memory.type);
 
     if (compressedSummary) {
-      // 更新记忆摘要（作为新版本的一部分）
+      // 使用 metaStore 更新记忆摘要
+      // 注意：这里只更新 SQLite 中的 summary 字段，不影响 Palace 中存储的原始内容
+      await this.metaStore.update(memory.uid, {
+        summary: compressedSummary,
+      });
+
       this.logger.debug('Memory compressed', {
         uid: memory.uid,
         originalLength: content.length,
         summaryLength: compressedSummary.length,
+        originalSummary: memory.summary?.substring(0, 50) + '...',
       });
 
-      // 注意：不直接修改原记忆，而是在下次更新时使用新摘要
-      // 这里只是记录压缩结果
       return true;
     }
 

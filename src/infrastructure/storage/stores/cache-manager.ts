@@ -4,7 +4,7 @@
  */
 
 import type { ICacheManager, CacheConfig, CacheStats } from '../core/types';
-import { createLogger, ILogger } from '../../../shared/logging';
+import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 
 const DEFAULT_CACHE_CONFIG: CacheConfig = {
@@ -56,7 +56,7 @@ export class CacheManager implements ICacheManager {
       this.config = resolvedConfig;
     }
     this.cache = new Map();
-    this.logger = createLogger('CacheManager', { enabled: true });
+    this.logger = createServiceLogger('CacheManager');
     this.stats = { hits: 0, misses: 0, evictions: 0 };
   }
 

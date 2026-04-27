@@ -82,6 +82,7 @@ export interface VectorMetadata {
   isLatestVersion: boolean;     // 是否最新版本
   versionGroupId: string;       // 版本组 ID
   summary?: string;              // 摘要（从 VectorDocument.text 复制）
+  embeddingFailed?: boolean;     // 标记嵌入是否失败（失败时使用零向量）
 }
 
 /**
@@ -146,6 +147,7 @@ export interface MemoryMetaRecord {
   lastRecalledAt?: number;     // 最后召回时间戳（用于记忆降级和遗忘）
   recallCount: number;         // 召回次数（用于作用域升级评估）
   usedByAgents?: string[];     // 访问过该记忆的 Agent 列表（持久化）
+  summary?: string;            // 摘要（用于召回显示，可被压缩更新）
 
   // 指向当前版本内容
   currentPalaceRef: string;    // wingId/hallId/roomId/closet_{uid}_v{version}

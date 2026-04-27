@@ -4,7 +4,7 @@
  * v2.0.0: 内存存储版本，实际删除操作由 MemoryService 处理
  */
 
-import { createLogger, type ILogger } from '../../shared/logging';
+import { createServiceLogger, type ILogger } from '../../shared/logging';
 import type {
   SensitiveDataMark,
   SensitiveDataType,
@@ -34,7 +34,7 @@ export class PrivacyManager {
     _storage: undefined,
     options?: PrivacyManagerOptions
   ) {
-    this.logger = createLogger('privacy-manager');
+    this.logger = createServiceLogger('PrivacyManager');
     this.options = {
       enableSensitiveMarking: options?.enableSensitiveMarking ?? true,
       autoExpireDays: options?.autoExpireDays ?? 365,
@@ -107,12 +107,13 @@ export class PrivacyManager {
 
   /**
    * 导出用户数据
-   * v2.0.0: 注意 - 此方法需要 MemoryService 注入才能完整导出
+   * @deprecated v2.0.0: 此方法已废弃，请使用 ProfileManager.exportUserData()
+   *              PrivacyManager 不持有数据，只管理敏感标记
    */
   exportUserData(
-    userId: string,
-    format: ExportFormat = 'json',
-    options?: {
+    _userId: string,
+    _format: ExportFormat = 'json',
+    _options?: {
       includePersona?: boolean;
       includePreferences?: boolean;
       includeInteractions?: boolean;
@@ -124,48 +125,12 @@ export class PrivacyManager {
       };
     }
   ): UserDataExport {
-    this.logger.info(`Exporting user data for ${userId} in ${format} format`);
-
-    const now = Date.now();
-    const exportData: UserDataExport['data'] = {};
-
-    // v2.0.0: 简化实现，实际数据应从 MemoryService 获取
-    // 过滤敏感数据
-    if (options?.includeSensitive !== true) {
-      const sensitiveMarks = this.getSensitiveMarks(userId);
-      const sensitiveDataIds = new Set(sensitiveMarks.map(m => m.dataId));
-      // 敏感数据将被排除
-    }
-
-    // 计算统计信息
-    const recordCount =
-      (exportData.persona?.length ?? 0) +
-      (exportData.preferences ? 1 : 0) +
-      (exportData.interactions?.length ?? 0) +
-      (exportData.tags?.length ?? 0);
-
-    const metadata: ExportMetadata = {
-      version: '1.0.0',
-      recordCount,
-      dateRange: {
-        start: options?.dateRange?.start ?? 0,
-        end: options?.dateRange?.end ?? now,
-      },
-    };
-
-    const exportResult: UserDataExport = {
-      userId,
-      exportedAt: now,
-      format,
-      data: exportData,
-      metadata,
-    };
-
-    this.logger.info(
-      `Exported ${recordCount} records for user ${userId}`
+    this.logger.error('PrivacyManager.exportUserData is deprecated, use ProfileManager.exportUserData instead');
+    throw new Error(
+      'PrivacyManager.exportUserData is deprecated. ' +
+      'Please use ProfileManager.exportUserData() for proper data export ' +
+      'with access to MemoryService, InteractionRecorder, and TagManager.'
     );
-
-    return exportResult;
   }
 
   /**

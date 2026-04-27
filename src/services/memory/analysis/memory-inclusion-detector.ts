@@ -9,7 +9,7 @@
  */
 
 import type { InclusionResult, InclusionCheckRequest } from '../../../core/types/memory';
-import { createLogger } from '../../../shared/logging';
+import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import type { MemoryCaptureConfig } from '../../../core/types/memory';
@@ -55,7 +55,7 @@ export class MemoryInclusionDetector {
     } else {
       this.config = this.loadConfigFromManager();
     }
-    this.logger = createLogger('MemoryInclusionDetector');
+    this.logger = createServiceLogger('MemoryInclusionDetector');
   }
 
   /**
