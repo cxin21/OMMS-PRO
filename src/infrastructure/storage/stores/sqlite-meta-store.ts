@@ -8,7 +8,7 @@
  * - Palace 层级化存储
  */
 
-import type { MemoryScope, MemoryType, MemoryBlock } from '../../../core/types/memory';
+import type { MemoryScope, MemoryType, MemoryBlock } from '../../../types/memory';
 import type {
   ISQLiteMetaStore,
   MemoryMetaRecord,
@@ -20,6 +20,35 @@ import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
 import { config } from '../../../shared/config';
+
+/**
+ * SQLiteError - 带上下文的存储层异常
+ */
+export class SQLiteError extends Error {
+  constructor(
+    message: string,
+    public readonly operation: string,
+    public readonly context?: Record<string, unknown>
+  ) {
+    super(message);
+    this.name = 'SQLiteError';
+  }
+}
+
+/**
+ * 安全包装错误，添加上下文信息
+ */
+function wrapError(error: unknown, operation: string, context?: Record<string, unknown>): never {
+  if (error instanceof SQLiteError) {
+    throw error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  throw new SQLiteError(
+    `${operation} failed: ${message}`,
+    operation,
+    context
+  );
+}
 
 /**
  * Version record stored in the separate memory_versions table
@@ -183,7 +212,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.info('SQLiteMetaStore initialized', { dbPath: this.config.dbPath });
     } catch (error) {
       this.logger.error('Failed to initialize SQLiteMetaStore', { error });
-      throw error;
+      wrapError(error, 'initialize', { dbPath: this.config.dbPath });
     }
   }
 
@@ -267,7 +296,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Meta record inserted', { uid: record.uid, versionGroupId: record.versionGroupId });
     } catch (error) {
       this.logger.error('Failed to insert meta record', { uid: record.uid, error });
-      throw error;
+      wrapError(error, 'insert', { uid: record.uid, versionGroupId: record.versionGroupId });
     }
   }
 
@@ -324,7 +353,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Meta records batch inserted', { count: records.length });
     } catch (error) {
       this.logger.error('Failed to batch insert meta records', { error });
-      throw error;
+      wrapError(error, 'insertBatch', { count: records.length });
     }
   }
 
@@ -422,7 +451,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Meta record updated', { uid });
     } catch (error) {
       this.logger.error('Failed to update meta record', { uid, error });
-      throw error;
+      wrapError(error, 'update', { uid });
     }
   }
 
@@ -438,7 +467,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Meta record deleted', { uid });
     } catch (error) {
       this.logger.error('Failed to delete meta record', { uid, error });
-      throw error;
+      wrapError(error, 'delete', { uid });
     }
   }
 
@@ -462,7 +491,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Meta records batch deleted', { count: uids.length });
     } catch (error) {
       this.logger.error('Failed to batch delete meta records', { error });
-      throw error;
+      wrapError(error, 'deleteBatch', { count: uids.length });
     }
   }
 
@@ -489,7 +518,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       return rows.map(this.rowToRecord);
     } catch (error) {
       this.logger.error('Query failed', { error });
-      throw error;
+      wrapError(error, 'query', { options: JSON.stringify(options) });
     }
   }
 
@@ -506,7 +535,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       return row ? this.rowToRecord(row) : null;
     } catch (error) {
       this.logger.error('Failed to get by uid', { uid, error });
-      throw error;
+      wrapError(error, 'getById', { uid });
     }
   }
 
@@ -526,7 +555,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       return rows.map(this.rowToRecord);
     } catch (error) {
       this.logger.error('Failed to get by uids', { error });
-      throw error;
+      wrapError(error, 'getByIds', { count: uids.length });
     }
   }
 
@@ -547,7 +576,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       return result.count;
     } catch (error) {
       this.logger.error('Count failed', { error });
-      throw error;
+      wrapError(error, 'count', { options: JSON.stringify(options) });
     }
   }
 
@@ -614,7 +643,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       }));
     } catch (error) {
       this.logger.error('Failed to get versions by groupId', { versionGroupId, error });
-      throw error;
+      wrapError(error, 'getVersionsByGroupId', { versionGroupId });
     }
   }
 
@@ -653,7 +682,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
     try {
       const record = await this.getById(uid);
       if (!record) {
-        throw new Error(`Memory not found: ${uid}`);
+        throw new SQLiteError(`Memory not found: ${uid}`, 'addVersion', { uid });
       }
 
       const newVersionChain = [...record.versionChain, versionInfo];
@@ -682,7 +711,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       this.logger.debug('Version added', { uid, version: versionInfo.version });
     } catch (error) {
       this.logger.error('Failed to add version', { uid, error });
-      throw error;
+      wrapError(error, 'addVersion', { uid, version: versionInfo.version });
     }
   }
 
@@ -721,7 +750,7 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       return;
     } catch (error) {
       this.logger.error('Failed to prune versions', { uid, error });
-      throw error;
+      wrapError(error, 'pruneVersions', { uid, maxVersions });
     }
   }
 
@@ -920,26 +949,14 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
   /**
    * 执行增量 Schema 迁移（幂等，可多次调用）
    * 注意：这是一个同步方法，必须幂等
+   *
+   * 已迁移到 initialize() 中的幂等检查，此处仅做占位
+   * 保留此方法以兼容接口，但实际迁移逻辑已在 initialize() 中完成
    */
   private runMigrations(): void {
-    try {
-      // 检查列是否已存在（使用同步查询）
-      const result = this.db.exec("PRAGMA table_info(memory_meta)");
-      const columns = result[0]?.values?.map((row: any) => row[1]) || [];
-      if (!columns.includes('usedByAgents')) {
-        this.db.exec(`ALTER TABLE memory_meta ADD COLUMN usedByAgents TEXT NOT NULL DEFAULT '[]'`);
-        this.logger.info('Migration applied: added usedByAgents column to memory_meta');
-      } else {
-        this.logger.debug('Migration skipped: usedByAgents column already exists');
-      }
-      // 迁移成功后设置标志（即使列已存在也设置，避免重复检查）
-      this.migrated = true;
-    } catch (error) {
-      // 记录错误但不设置标志，下次调用时会重试迁移
-      // 这样可以避免数据库在迁移失败后处于不一致状态
-      this.logger.error('Migration failed - will retry on next operation', { error: String(error) });
-      // 不设置 this.migrated = true，让迁移在下次操作时重试
-    }
+    // usedByAgents 列已在 CREATE TABLE 时创建，不需要额外迁移
+    // 此方法保留以兼容调用链，但实际为空操作
+    this.migrated = true;
   }
 
   /**

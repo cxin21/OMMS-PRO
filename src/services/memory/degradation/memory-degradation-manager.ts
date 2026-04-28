@@ -26,11 +26,14 @@ import { StringUtils } from '../../../shared/utils/string';
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import type { ForgetReport } from '../types';
-import { MemoryScope, MemoryType, PROFILE_TYPES, isProfileType } from '../../../core/types/memory';
+import { MemoryScope, MemoryType, PROFILE_TYPES, isProfileType } from '../../../types/memory';
 import { config } from '../../../shared/config';
 import { TransactionManager } from '../utils/transaction-manager';
 import { getScopeUpgradeThresholds } from '../utils/block-utils';
 import { getDegradationImportanceDecayRate } from '../utils/memory-config-utils';
+
+// 模块级 logger 用于 AAAK 配置验证
+const _moduleLogger = createServiceLogger('MemoryDegradationManager');
 
 // ============================================================
 // AAAK Flag 保护配置
@@ -52,7 +55,19 @@ function getAAAKFlagProtection(): Record<string, number> {
     throw new Error('ConfigManager not initialized. Cannot read memoryService.degradation.aaakProtection.');
   }
   const degradationConfig = config.getConfigOrThrow<{ aaakProtection: Record<string, number> }>('memoryService.degradation');
-  return degradationConfig.aaakProtection;
+  const protection = degradationConfig.aaakProtection;
+
+  // 验证配置的 aaakProtection flags 是否与已知 AAAK flags 匹配
+  // 已知 AAAK flags: DECISION, ORIGIN, CORE, PIVOT, TECHNICAL
+  const knownFlags = ['DECISION', 'ORIGIN', 'CORE', 'PIVOT', 'TECHNICAL'];
+  for (const flag of Object.keys(protection)) {
+    if (!knownFlags.includes(flag)) {
+      // 使用 logger 记录未识别的 flag 警告
+      _moduleLogger.warn(`Unknown aaakProtection flag "${flag}" in config. Known flags: ${knownFlags.join(', ')}. This flag will be ignored.`);
+    }
+  }
+
+  return protection;
 }
 
 /**
@@ -112,6 +127,8 @@ export interface DegradationConfig {
   protectLevel: number;
   /** 归档衰减乘数：归档记忆衰减加速系数，默认 2.0 */
   archivedDecayMultiplier: number;
+  /** 作用域降级互斥锁最大等待毫秒数，默认 60000 */
+  maxDegradationWaitMs: number;
 }
 
 /**
@@ -600,8 +617,10 @@ export class MemoryDegradationManager {
         return null;
       }
 
-      // 等待锁释放后重试
-      await existingPromise.catch(() => {}); // 即使 promise 不被 reject 也等待
+      // 等待锁释放后重试 (等待完成，不管成功或失败)
+      await existingPromise.catch((err) => {
+        this.logger.warn('Previous lock operation failed', { uid, error: String(err) });
+      });
     }
   }
 
@@ -640,7 +659,7 @@ export class MemoryDegradationManager {
    */
   async runScopeDegradationCycle(): Promise<ScopeDegradationReport> {
     // 互斥锁：防止与遗忘周期并发执行（改为等待而非跳过）
-    const maxWaitMs = 60000; // 最多等待60秒
+    const maxWaitMs = this.config.maxDegradationWaitMs;
     const startWait = Date.now();
 
     while (this.isDegradationRunning) {
@@ -974,8 +993,14 @@ export class MemoryDegradationManager {
                     newPalaceRef,
                     error: String(restoreErr),
                   });
-                  // 仍然尝试删除新文件
-                  await this.palaceStore.delete(newPalaceRef).catch(() => {});
+                  // 仍然尝试删除新文件，即使失败也记录
+                  await this.palaceStore.delete(newPalaceRef).catch((deleteErr) => {
+                    this.logger.error('CRITICAL: Also failed to delete new palace file during rollback - requires manual cleanup', {
+                      uid,
+                      newPalaceRef,
+                      error: String(deleteErr),
+                    });
+                  });
                   return;
                 }
               }

@@ -11,6 +11,7 @@ import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
 import type { MemorySentimentConfig } from '../../../core/types/config';
 import { PromptLoader } from '../../../shared/prompts';
+import { MemoryDefaults } from '../../../config';
 
 export interface SentimentResult {
   /** 主要情感 */
@@ -90,7 +91,7 @@ function getDefaultConfig(): SentimentAnalyzerConfig {
       const sentimentConfig = config.getConfig('memoryService.sentiment') as MemorySentimentConfig;
       return {
         minContentLength: 10,  // 规则基础配置，不在 MemorySentimentConfig 中
-        llmRefineThreshold: sentimentConfig?.llmRefineThreshold ?? 0.6,
+        llmRefineThreshold: sentimentConfig?.llmRefineThreshold ?? MemoryDefaults.llmRefineThreshold,
       };
     }
   } catch {
@@ -98,7 +99,7 @@ function getDefaultConfig(): SentimentAnalyzerConfig {
   }
   return {
     minContentLength: 10,
-    llmRefineThreshold: 0.6,
+    llmRefineThreshold: MemoryDefaults.llmRefineThreshold,
   };
 }
 

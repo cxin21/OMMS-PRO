@@ -12,7 +12,7 @@
 
 import { createLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
-import type { Memory, MemoryScope, MemoryType } from '../../../core/types/memory';
+import type { Memory, MemoryScope, MemoryType } from '../../../types/memory';
 
 export interface RecallStrategyConfig {
   /** 时间衰减因子 (0-1, 越小衰减越快) */

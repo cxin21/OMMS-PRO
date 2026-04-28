@@ -7,6 +7,10 @@
  * 置信度过滤 (< 0.5 丢弃)
  * - 相似度 >= 90% 自动版本化
  * - LLM 生成摘要
+ *
+ * 注意: conversationThreshold 配置由 API 层使用 (memory.ts:171-174)
+ * 用于在调用 capture() 之前判断是否应该使用 LLM 提取
+ * 阈值判断发生在 API 路由层，不在 capture 服务内部
  */
 
 import type {
@@ -16,14 +20,14 @@ import type {
   MemoryCaptureConfig,
   ExtractedMemory,
   DEFAULT_MEMORY_TYPES,
-} from '../../../core/types/memory';
-import { MemoryType } from '../../../core/types/memory';
+} from '../../../types/memory';
+import { MemoryType } from '../../../types/memory';
 import type { MemoryVersionManager } from '../store/memory-version-manager';
 import type { MemoryStoreManager } from '../store/memory-store-manager';
 import type { LLMScoringResult } from '../llm/llm-extractor';
 import type { ProfileManager } from '../../profile/profile-manager';
 import { MemoryInclusionDetector } from '../analysis/memory-inclusion-detector';
-import type { InclusionResult } from '../../../core/types/memory';
+import type { InclusionResult } from '../../../types/memory';
 import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
@@ -33,6 +37,7 @@ import { compressToAAAK, encodeAAAK } from '../aaak';
 import {
   IncrementalCaptureManager,
 } from './incremental-capture';
+import { MemoryDefaults } from '../../../config';
 
 /**
  * LLM Extractor 接口
@@ -74,6 +79,9 @@ export class MemoryCaptureService {
   // 锁的 TTL（毫秒），从 memoryService.capture.versionLockTTLMs 读取
   private versionLockTTLMs: number;
 
+  // 锁获取等待超时（毫秒），从 memoryService.capture.versionLockWaitMs 读取
+  private versionLockWaitMs: number;
+
   // 实例唯一标识（用于标识锁持有者）
   private instanceId: string;
 
@@ -93,6 +101,7 @@ export class MemoryCaptureService {
     // 加载版本锁配置
     const captureConfig = config.getConfigOrThrow<Record<string, unknown>>('memoryService.capture');
     this.versionLockTTLMs = (captureConfig['versionLockTTLMs'] as number) ?? 30000;
+    this.versionLockWaitMs = (captureConfig['versionLockWaitMs'] as number) ?? MemoryDefaults.versionLockWaitMs;
 
     // 生成实例唯一标识
     this.instanceId = `capture-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -153,14 +162,16 @@ export class MemoryCaptureService {
     const llmConfig = config.getConfigOrThrow<Record<string, unknown>>('llmExtraction');
 
     return {
-      maxMemoriesPerCapture: captureConfig['maxMemoriesPerCapture'] as number,
-      similarityThreshold: versionConfig['similarityThreshold'] as number,
-      confidenceThreshold: captureConfig['confidenceThreshold'] as number,
+      maxMemoriesPerCapture: (captureConfig['maxMemoriesPerCapture'] as number) ?? MemoryDefaults.maxMemoriesPerCapture,
+      similarityThreshold: (versionConfig['similarityThreshold'] as number) ?? MemoryDefaults.similarityThreshold,
+      confidenceThreshold: (captureConfig['confidenceThreshold'] as number) ?? MemoryDefaults.confidenceThreshold,
       enableLLMSummarization: captureConfig['enableLLMSummarization'] as boolean,
       llmProvider: llmConfig['provider'] as MemoryCaptureConfig['llmProvider'],
       llmApiKey: llmConfig['apiKey'] as string,
       llmEndpoint: llmConfig['baseURL'] as string,
       llmModel: llmConfig['model'] as string,
+      inclusionSimilarityThreshold: (captureConfig['inclusionSimilarityThreshold'] as number) ?? MemoryDefaults.inclusionSimilarityThreshold,
+      contextExtension: (captureConfig['contextExtension'] as number) ?? MemoryDefaults.contextExtension,
     };
   }
 
@@ -175,14 +186,16 @@ export class MemoryCaptureService {
 
     // 使用 ConfigManager 配置作为基础，合并用户提供的覆盖
     return {
-      maxMemoriesPerCapture: userConfig.maxMemoriesPerCapture ?? captureConfig['maxMemoriesPerCapture'] as number,
-      similarityThreshold: userConfig.similarityThreshold ?? versionConfig['similarityThreshold'] as number,
-      confidenceThreshold: userConfig.confidenceThreshold ?? captureConfig['confidenceThreshold'] as number,
+      maxMemoriesPerCapture: userConfig.maxMemoriesPerCapture ?? (captureConfig['maxMemoriesPerCapture'] as number) ?? MemoryDefaults.maxMemoriesPerCapture,
+      similarityThreshold: userConfig.similarityThreshold ?? (versionConfig['similarityThreshold'] as number) ?? MemoryDefaults.similarityThreshold,
+      confidenceThreshold: userConfig.confidenceThreshold ?? (captureConfig['confidenceThreshold'] as number) ?? MemoryDefaults.confidenceThreshold,
       enableLLMSummarization: userConfig.enableLLMSummarization ?? captureConfig['enableLLMSummarization'] as boolean,
       llmProvider: userConfig.llmProvider ?? llmConfig['provider'] as MemoryCaptureConfig['llmProvider'],
       llmApiKey: userConfig.llmApiKey ?? llmConfig['apiKey'] as string,
       llmEndpoint: userConfig.llmEndpoint ?? llmConfig['baseURL'] as string,
       llmModel: userConfig.llmModel ?? llmConfig['model'] as string,
+      inclusionSimilarityThreshold: userConfig.inclusionSimilarityThreshold ?? (captureConfig['inclusionSimilarityThreshold'] as number) ?? MemoryDefaults.inclusionSimilarityThreshold,
+      contextExtension: userConfig.contextExtension ?? (captureConfig['contextExtension'] as number) ?? MemoryDefaults.contextExtension,
     };
   }
 
@@ -326,7 +339,7 @@ export class MemoryCaptureService {
         for (const candidate of relevantCandidates) {
           const candidateSimilarity = candidate.score;
 
-          if (candidateSimilarity >= 0.95) {
+          if (candidateSimilarity >= MemoryDefaults.identicalThreshold) {
             this.logger.info('High similarity detected, creating new version', {
               existingMemoryId: candidate.memoryId,
               similarity: candidateSimilarity,
@@ -335,7 +348,7 @@ export class MemoryCaptureService {
             break;
           }
 
-          if (candidateSimilarity >= 0.7 && candidateSimilarity < 0.95) {
+          if (candidateSimilarity >= this.config.inclusionSimilarityThreshold && candidateSimilarity < 0.95) {
             const inclusionResult = await this.checkSemanticInclusion(enriched.item, enriched.summary, candidate.memoryId);
 
             if (inclusionResult) {
@@ -457,9 +470,8 @@ export class MemoryCaptureService {
 
     // 使用 segmentStart/segmentEnd 进行字符级扩展
     if (segmentStart !== undefined && segmentEnd !== undefined) {
-      const contextExtension = 200;
-      const extendedStart = Math.max(0, segmentStart - contextExtension);
-      const extendedEnd = Math.min(originalContent.length, segmentEnd + contextExtension);
+      const extendedStart = Math.max(0, segmentStart - this.config.contextExtension);
+      const extendedEnd = Math.min(originalContent.length, segmentEnd + this.config.contextExtension);
       return originalContent.substring(extendedStart, extendedEnd);
     }
 
@@ -775,17 +787,19 @@ export class MemoryCaptureService {
    * @param timeoutMs 超时时间（毫秒）
    * @returns 释放锁的函数，如果超时返回 null
    */
-  private async acquireVersionLock(versionGroupId: string, timeoutMs: number = 5000): Promise<(() => void) | null> {
+  private async acquireVersionLock(versionGroupId: string, timeoutMs?: number): Promise<(() => void) | null> {
     if (!this.distributedLockManager) {
       this.logger.warn('DistributedLockManager not available, skipping lock acquisition');
       return null;
     }
 
+    // 使用配置的超时时间
+    const effectiveTimeoutMs = timeoutMs ?? this.versionLockWaitMs;
     const lockKey = `version:${versionGroupId}`;
     const releaseLock = await this.distributedLockManager.waitForLock(
       lockKey,
       this.instanceId,
-      timeoutMs
+      effectiveTimeoutMs
     );
 
     if (releaseLock) {

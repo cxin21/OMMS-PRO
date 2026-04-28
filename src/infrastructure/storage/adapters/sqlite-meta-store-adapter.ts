@@ -1,7 +1,7 @@
 import type { IStorageBackend, StorageStats, QueryCondition, SearchOptions, SearchResult } from '../core/interfaces';
 import type { SQLiteMetaStore } from '../stores/sqlite-meta-store';
 import type { SQLiteQueryOptions } from '../core/types';
-import type { MemoryScope, MemoryType } from '../../../core/types/memory';
+import type { MemoryScope, MemoryType } from '../../../types/memory';
 
 export class SQLiteMetaStoreAdapter implements IStorageBackend {
   constructor(private metaStore: SQLiteMetaStore) {}

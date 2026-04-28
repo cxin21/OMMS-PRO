@@ -10,7 +10,7 @@
  */
 
 import type { LogLevel } from '../../shared/logging/types';
-import { MemoryBlock, MemoryScope, MemoryType } from '../../core/types/memory';
+import { MemoryBlock, MemoryScope, MemoryType } from '../../types/memory';
 
 /**
  * 整理类型枚举 (v2.0.0)

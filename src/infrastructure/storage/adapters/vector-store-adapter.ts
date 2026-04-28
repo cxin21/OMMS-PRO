@@ -1,6 +1,6 @@
 import type { IVectorStorageBackend, VectorStorageMetadata, VectorItem, SearchOptions, SearchResult, QueryCondition } from '../core/interfaces';
 import type { VectorDocument } from '../core/types';
-import type { MemoryScope, MemoryType } from '../../../core/types/memory';
+import type { MemoryScope, MemoryType } from '../../../types/memory';
 import { VectorStore } from '../stores/vector-store';
 
 export class VectorStoreAdapter implements IVectorStorageBackend {

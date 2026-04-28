@@ -10,7 +10,7 @@
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
-import type { CaptureInput } from '../../../core/types/memory';
+import type { CaptureInput } from '../../../types/memory';
 
 /**
  * 内容 hash 缓存条目

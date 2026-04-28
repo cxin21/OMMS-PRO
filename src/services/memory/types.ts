@@ -3,41 +3,19 @@
  *
  * 本文件定义了 Memory Service 使用的所有核心类型
  * 注意：MemoryType, MemoryScope, MemoryBlock 已统一到 @/types/memory
+ * HallType, WingType 已统一到 @/types/palace
  *
  * @module memory-service/types
  * @since 0.1.0
  */
 
 import { LogLevel } from '../../shared/logging/types';
-import { MemoryType, MemoryScope, MemoryBlock } from '../../core/types/memory';
+import { MemoryType, MemoryScope, MemoryBlock } from '../../types/memory';
 
-/**
- * Hall 类型枚举
- *
- * 定义记忆宫殿中 Hall 的类型，与 MemoryType 一一对应
- */
-export enum HallType {
-  FACTS = 'facts',        // 事实型记忆
-  EVENTS = 'events',      // 事件型记忆
-  DECISIONS = 'decisions', // 决策型记忆
-  ERRORS = 'errors',      // 错误型记忆
-  LEARNINGS = 'learnings', // 学习型记忆
-  RELATIONS = 'relations', // 关系型记忆
-}
-
-/**
- * Wing 类型枚举
- *
- * 定义记忆宫殿中 Wing 的类型
- */
-export enum WingType {
-  SESSION = 'session',   // 会话级 Wing
-  AGENT = 'agent',       // Agent 级 Wing
-  GLOBAL = 'global',     // 全局级 Wing
-}
-
-// Re-export types from types/memory for backward compatibility within memory-service
-export { MemoryType, MemoryScope, MemoryBlock } from '../../core/types/memory';
+// Re-export from new types layer for backward compatibility
+export { MemoryType, MemoryScope, MemoryBlock } from '../../types/memory';
+export { HallType, WingType } from '../../types/palace';
+export { HALL_TO_MEMORY_TYPE_MAP, MEMORY_TO_HALL_TYPE_MAP } from '../../types/palace';
 
 /**
  * 记忆输入接口
@@ -637,34 +615,3 @@ export interface MemoryServiceConfig {
   };
 }
 
-/**
- * 注意：默认配置已统一移至 src/types/config.ts 的 DEFAULT_OMMS_CONFIG.memoryService
- */
-
-/**
- * Hall 类型到 Memory 类型的映射
- */
-export const HALL_TO_MEMORY_TYPE_MAP: Record<HallType, MemoryType> = {
-  [HallType.FACTS]: MemoryType.FACT,
-  [HallType.EVENTS]: MemoryType.EVENT,
-  [HallType.DECISIONS]: MemoryType.DECISION,
-  [HallType.ERRORS]: MemoryType.ERROR,
-  [HallType.LEARNINGS]: MemoryType.LEARNING,
-  [HallType.RELATIONS]: MemoryType.RELATION,
-};
-
-/**
- * Memory 类型到 Hall 类型的映射
- */
-export const MEMORY_TO_HALL_TYPE_MAP: Record<MemoryType, HallType> = {
-  [MemoryType.FACT]: HallType.FACTS,
-  [MemoryType.EVENT]: HallType.EVENTS,
-  [MemoryType.DECISION]: HallType.DECISIONS,
-  [MemoryType.ERROR]: HallType.ERRORS,
-  [MemoryType.LEARNING]: HallType.LEARNINGS,
-  [MemoryType.RELATION]: HallType.RELATIONS,
-  // Profile 相关类型映射到 facts（作为默认处理）
-  [MemoryType.IDENTITY]: HallType.FACTS,
-  [MemoryType.PREFERENCE]: HallType.FACTS,
-  [MemoryType.PERSONA]: HallType.FACTS,
-};

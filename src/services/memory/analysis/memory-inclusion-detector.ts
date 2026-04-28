@@ -8,12 +8,13 @@
  * - 用于记忆版本化和合并策略
  */
 
-import type { InclusionResult, InclusionCheckRequest } from '../../../core/types/memory';
+import type { InclusionResult, InclusionCheckRequest } from '../../../types/memory';
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
-import type { MemoryCaptureConfig } from '../../../core/types/memory';
+import type { MemoryCaptureConfig } from '../../../types/memory';
 import { PromptLoader } from '../../../shared/prompts';
+import { MemoryDefaults } from '../../../config';
 
 /**
  * Inclusion Detector 配置
@@ -63,13 +64,14 @@ export class MemoryInclusionDetector {
    */
   private loadConfigFromManager(): Required<InclusionDetectorConfig> {
     const llmConfig = config.getConfigOrThrow<Record<string, unknown>>('llmExtraction');
+    const inclusionConfig = config.getConfig<Record<string, unknown>>('memoryService.inclusion');
     return {
       llmApiKey: llmConfig['apiKey'] as string | undefined,
       llmEndpoint: llmConfig['baseURL'] as string | undefined,
       llmModel: llmConfig['model'] as string | undefined,
       llmProvider: (llmConfig['provider'] as InclusionDetectorConfig['llmProvider']) ?? 'custom',
-      inclusionThreshold: llmConfig['inclusionThreshold'] as number | undefined,
-      identicalThreshold: llmConfig['identicalThreshold'] as number | undefined,
+      inclusionThreshold: (inclusionConfig?.['inclusionThreshold'] as number | undefined) ?? MemoryDefaults.inclusionThreshold,
+      identicalThreshold: (inclusionConfig?.['identicalThreshold'] as number | undefined) ?? MemoryDefaults.identicalThreshold,
     } as Required<InclusionDetectorConfig>;
   }
 
@@ -278,7 +280,7 @@ export class MemoryInclusionDetector {
 
       return {
         type: normalizedType,
-        inclusionScore: Math.max(0, Math.min(1, parsed.inclusionScore ?? 0.5)),
+        inclusionScore: Math.max(0, Math.min(1, parsed.inclusionScore ?? this.config.inclusionThreshold)),
         reasoning: (parsed.reasoning ?? '').substring(0, 100),
         existingMemoryId: '', // 由调用方填充
       };

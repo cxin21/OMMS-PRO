@@ -25,7 +25,7 @@ export type { ConsolidationConfig, ConsolidationResult } from './consolidation/c
 // LLM
 export { createLLMExtractor } from './llm/llm-extractor';
 export type { ILLMExtractor } from './llm/llm-extractor';
-export type { ExtractedMemory as LLMExtractionResult } from '../../core/types/memory';
+export type { ExtractedMemory as LLMExtractionResult } from '../../types/memory';
 
 // Analysis
 export { TopicDetector } from './analysis/topic-detector';

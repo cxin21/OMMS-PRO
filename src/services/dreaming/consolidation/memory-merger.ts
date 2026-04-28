@@ -26,7 +26,7 @@ import type {
   SimilarMemoryGroup,
   ConsolidationConfig,
 } from '../types';
-import { MemoryType, isProfileType, MemoryScope } from '../../../core/types/memory';
+import { MemoryType, isProfileType, MemoryScope } from '../../../types/memory';
 
 /**
  * MemoryMerger - 记忆合并器

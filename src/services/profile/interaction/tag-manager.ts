@@ -15,6 +15,7 @@ import { config } from '../../../shared/config';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
+import { ONE_DAY_MS } from '../../../config';
 
 export interface TagManagerOptions {
   maxTagsPerUser?: number;
@@ -256,7 +257,7 @@ export class TagManager {
       weight,
       createdAt: now,
       updatedAt: now,
-      expiresAt: expiresAt ?? (now + this.options.autoExpireDays * 24 * 60 * 60 * 1000),
+      expiresAt: expiresAt ?? (now + this.options.autoExpireDays * ONE_DAY_MS),
       metadata: metadata ?? {},
     };
 
@@ -615,7 +616,7 @@ export class TagManager {
       weight: 0.5,
       createdAt: now,
       updatedAt: now,
-      expiresAt: now + this.options.autoExpireDays * 24 * 60 * 60 * 1000,
+      expiresAt: now + this.options.autoExpireDays * ONE_DAY_MS,
       metadata: {
         evidence: ['recommendation'],
       },

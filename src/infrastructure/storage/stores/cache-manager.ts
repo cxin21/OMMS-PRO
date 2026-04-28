@@ -6,10 +6,11 @@
 import type { ICacheManager, CacheConfig, CacheStats } from '../core/types';
 import { createServiceLogger, ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
+import { MemoryDefaults } from '../../../config';
 
 const DEFAULT_CACHE_CONFIG: CacheConfig = {
-  maxSize: 1000,
-  ttl: 3600000, // 1 hour
+  maxSize: MemoryDefaults.cacheMaxSize,
+  ttl: MemoryDefaults.cacheTTL,
   evictionPolicy: 'lru',
 };
 

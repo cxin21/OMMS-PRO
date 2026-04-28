@@ -8,8 +8,8 @@
  * - Palace 层级化存储
  */
 
-import type { Memory, MemoryInput } from '../../../core/types/memory';
-import { MemoryType, MemoryScope, MemoryBlock, isProfileType } from '../../../core/types/memory';
+import type { Memory, MemoryInput } from '../../../types/memory';
+import { MemoryType, MemoryScope, MemoryBlock, isProfileType } from '../../../types/memory';
 import type {
   ICacheManager,
   IVectorStore,
@@ -1055,7 +1055,7 @@ export class MemoryStoreManager {
             // 根据实体类型决定关系权重
             const entityI = extractedEntities[i];
             const entityJ = extractedEntities[j];
-            const relationWeight = this._calculateEntityRelationWeight(entityI.type, entityJ.type);
+            const relationWeight = this._calculateEntityRelationWeight(entityI.type as any, entityJ.type as any);
 
             edges.push({
               id: `edge_${extractedEntityIds[i]}_${extractedEntityIds[j]}`,

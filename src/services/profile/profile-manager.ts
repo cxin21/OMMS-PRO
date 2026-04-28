@@ -17,7 +17,7 @@ import { PrivacyManager } from './privacy-manager';
 import { ProfileCache } from './profile-cache';
 import type { StorageMemoryService } from '../memory/core/storage-memory-service';
 import type { ILLMExtractor, LLMScoringResult } from '../memory/llm/llm-extractor';
-import { MemoryType, MemoryScope, MemoryBlock } from '../../core/types/memory';
+import { MemoryType, MemoryScope, MemoryBlock } from '../../types/memory';
 import type {
   Persona,
   PersonaUpdate,

@@ -9,7 +9,7 @@ import { Router, Request, Response } from 'express';
 import type { MemoryService, MemoryCaptureService } from '../../services/memory';
 import type { ProfileManager } from '../../services/profile/profile-manager';
 import type { ILogger } from '../../shared/logging';
-import { MemoryType, MemoryScope } from '../../core/types/memory';
+import { MemoryType, MemoryScope } from '../../types/memory';
 import { config } from '../../shared/config';
 
 /**
@@ -65,7 +65,7 @@ function getConversationThreshold(): number {
       if (storeConfig?.chunkThreshold) return storeConfig.chunkThreshold;
     }
   } catch { /* ignore */ }
-  return 500;
+  return config.getConfig<number>('memoryService.capture.conversationThreshold') ?? 500;
 }
 
 export interface MemoryRoutesDeps {
@@ -226,8 +226,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         console.log('[capture] Skipping LLM extraction - captureService is undefined, content length:', finalContent.length);
       }
       const storeConfig = config.getConfig<{ defaultImportance?: number; defaultScopeScore?: number }>('memoryService.store');
-      const defaultImportance = storeConfig?.defaultImportance ?? 5;
-      const defaultScopeScore = storeConfig?.defaultScopeScore ?? defaultImportance;
+      const defaultImportance = storeConfig?.defaultImportance ?? config.getConfig<number>('memoryService.store.defaultImportance') ?? 5;
+      const defaultScopeScore = storeConfig?.defaultScopeScore ?? config.getConfig<number>('memoryService.store.defaultScopeScore') ?? defaultImportance;
       const finalScores = {
         importance: scores?.importance ?? defaultImportance,
         scopeScore: scores?.scopeScore ?? scores?.importance ?? defaultScopeScore,

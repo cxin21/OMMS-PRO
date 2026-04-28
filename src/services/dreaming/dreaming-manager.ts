@@ -52,7 +52,7 @@ import { DreamStorage } from './storage/dream-storage';
 import { config } from '../../shared/config';
 import { ConfigLoader } from '../../shared/config/loader';
 import type { DreamingEngineConfig as DefaultDreamingEngineConfig } from '../../core/types/config';
-import { MemoryScope, MemoryType } from '../../core/types/memory';
+import { MemoryScope, MemoryType } from '../../types/memory';
 
 /**
  * 扫描阶段结果

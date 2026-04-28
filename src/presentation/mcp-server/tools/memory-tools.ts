@@ -22,7 +22,7 @@
 import { createLogger } from '../../../shared/logging';
 import type { MCPTool, ToolMetadata } from '../types';
 import type { StorageMemoryService } from '../../../services/memory/core/storage-memory-service';
-import { MemoryType, MemoryScope } from '../../../core/types/memory';
+import { MemoryType, MemoryScope } from '../../../types/memory';
 import * as http from 'http';
 import { config } from '../../../shared/config';
 

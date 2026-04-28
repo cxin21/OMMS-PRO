@@ -10,7 +10,7 @@
  * - Palace 层级化存储
  */
 
-import { Memory, MemoryType, MemoryScope, MemoryBlock, VersionInfo, PROFILE_TYPES } from '../../../core/types/memory';
+import { Memory, MemoryType, MemoryScope, MemoryBlock, VersionInfo, PROFILE_TYPES } from '../../../types/memory';
 import type {
   ICacheManager,
   IVectorStore,

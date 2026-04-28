@@ -7,9 +7,9 @@
  * - store 方法需要调用方传入预计算的评分
  */
 
-import type { Memory, MemoryInput, MemoryUpdate, RecallOptions } from '../../../core/types/memory';
+import type { Memory, MemoryInput, MemoryUpdate, RecallOptions } from '../../../types/memory';
 import type { ForgetReport } from '../types';
-import { MemoryScope, MemoryType, MemoryBlock } from '../../../core/types/memory';
+import { MemoryScope, MemoryType, MemoryBlock } from '../../../types/memory';
 import type {
   ICacheManager,
   IVectorStore,
@@ -28,6 +28,7 @@ import { MemoryAccessControl, type AccessLevel, type AccessDecision } from '../.
 import { IndexUpdateStrategy, type IndexUpdateTask, type IndexPriority } from '../../../infrastructure/indexing/index-update-strategy';
 import { RecallStrategy, type RecallContext, type RecallResult as StrategyRecallResult } from '../../../core/domain/memory/recall-strategy';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
+import { MemoryDefaults } from '../../../config';
 import { getReinforcementConfig, getScopeDegradationConfig } from '../utils/memory-config-utils';
 
 /**
@@ -163,11 +164,11 @@ export class StorageMemoryService {
       }>('memoryService.indexUpdate') || {};
       this.indexUpdateStrategy = new IndexUpdateStrategy({
         mode: indexUpdateConfig.mode ?? 'batch',
-        batchSize: indexUpdateConfig.batchSize ?? 100,
-        batchDelayMs: indexUpdateConfig.batchDelayMs ?? 5000,
-        maxPendingTasks: indexUpdateConfig.maxPendingTasks ?? 10000,
-        highPriorityThreshold: indexUpdateConfig.highPriorityThreshold ?? 0.8,
-        scheduledIntervalMs: indexUpdateConfig.scheduledIntervalMs ?? 60000,
+        batchSize: indexUpdateConfig.batchSize ?? MemoryDefaults.batchSize,
+        batchDelayMs: indexUpdateConfig.batchDelayMs ?? MemoryDefaults.batchDelayMs,
+        maxPendingTasks: indexUpdateConfig.maxPendingTasks ?? MemoryDefaults.maxPendingTasks,
+        highPriorityThreshold: indexUpdateConfig.highPriorityThreshold ?? MemoryDefaults.highPriorityThreshold,
+        scheduledIntervalMs: indexUpdateConfig.scheduledIntervalMs ?? MemoryDefaults.scheduledIntervalMs,
         maxRetries: indexUpdateConfig.maxRetries ?? 3,
         baseRetryDelayMs: indexUpdateConfig.baseRetryDelayMs ?? 1000,
         maxRetryDelayMs: indexUpdateConfig.maxRetryDelayMs ?? 60000,
@@ -187,13 +188,13 @@ export class StorageMemoryService {
         feedbackDecayMs?: number;
       }>('memoryService.recallStrategy') || {};
       this.recallStrategy = new RecallStrategy({
-        timeDecayFactor: recallStrategyConfig.timeDecayFactor ?? 0.5,
-        diversityWeight: recallStrategyConfig.diversityWeight ?? 0.2,
-        contextWeight: recallStrategyConfig.contextWeight ?? 0.3,
-        feedbackWeight: recallStrategyConfig.feedbackWeight ?? 0.2,
-        maxResults: recallStrategyConfig.maxResults ?? 20,
-        minDiversityScore: recallStrategyConfig.minDiversityScore ?? 0.3,
-        feedbackDecayMs: recallStrategyConfig.feedbackDecayMs ?? 86400000,
+        timeDecayFactor: recallStrategyConfig.timeDecayFactor ?? MemoryDefaults.timeDecayFactor,
+        diversityWeight: recallStrategyConfig.diversityWeight ?? MemoryDefaults.diversityWeight,
+        contextWeight: recallStrategyConfig.contextWeight ?? MemoryDefaults.contextWeight,
+        feedbackWeight: recallStrategyConfig.feedbackWeight ?? MemoryDefaults.feedbackWeight,
+        maxResults: recallStrategyConfig.maxResults ?? MemoryDefaults.maxResults,
+        minDiversityScore: recallStrategyConfig.minDiversityScore ?? MemoryDefaults.minDiversityScore,
+        feedbackDecayMs: recallStrategyConfig.feedbackDecayMs ?? MemoryDefaults.feedbackDecayMs,
       });
       this.logger.info('RecallStrategy initialized');
     }

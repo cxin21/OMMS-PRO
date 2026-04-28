@@ -10,6 +10,7 @@ import { config } from '../../../shared/config';
 import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
+import { ONE_DAY_MS } from '../../../config';
 import type {
   UserInteraction,
   InteractionType,
@@ -498,7 +499,7 @@ export class InteractionRecorder {
     userId: string,
     maxAgeDays: number = 90
   ): Promise<number> {
-    const cutoffTime = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - maxAgeDays * ONE_DAY_MS;
     const interactions = this.getInteractions(userId, {
       endDate: cutoffTime,
       limit: 10000,
@@ -669,8 +670,8 @@ export class InteractionRecorder {
       return 0;
     }
 
-    const daysSinceFirst = (Date.now() - firstInteraction) / (24 * 60 * 60 * 1000);
-    const daysSinceLast = (Date.now() - lastInteraction) / (24 * 60 * 60 * 1000);
+    const daysSinceFirst = (Date.now() - firstInteraction) / ONE_DAY_MS;
+    const daysSinceLast = (Date.now() - lastInteraction) / ONE_DAY_MS;
 
     // 基础分数：交互数量
     const interactionScore = Math.min(totalInteractions / 100, 1);

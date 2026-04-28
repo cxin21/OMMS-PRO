@@ -74,7 +74,6 @@ export class TransactionManager {
    * 支持普通操作和可准备操作（两阶段提交）
    */
   registerOperation(transactionId: string, op: StorageOperation | PreparableStorageOperation): void {
-    this.logger.debug('registerOperation called', { transactionId, mapSize: this.transactions.size, hasKey: this.transactions.has(transactionId) });
     const tx = this.transactions.get(transactionId);
     if (!tx) {
       this.logger.error('Transaction not found in registerOperation', { transactionId, availableKeys: Array.from(this.transactions.keys()) });
@@ -84,13 +83,7 @@ export class TransactionManager {
       throw new Error(`Transaction is not pending: ${transactionId}`);
     }
     tx.operations.push(op);
-    this.logger.debug('Operation registered', {
-      transactionId,
-      layer: op.layer,
-      operation: op.operation,
-      targetId: op.targetId,
-      hasPrepare: typeof (op as PreparableStorageOperation).prepare === 'function',
-    });
+    this.logger.debug('Operation registered', { transactionId, layer: op.layer, operation: op.operation, targetId: op.targetId.substring(0, 20) });
   }
 
   /**
@@ -129,12 +122,7 @@ export class TransactionManager {
     };
     tx.operations.push(op);
 
-    this.logger.debug('Batch operation registered', {
-      transactionId,
-      layer: batchOp.layer,
-      operation: batchOp.operation,
-      count: batchOp.targetIds.length,
-    });
+    this.logger.debug('Batch operation registered', { transactionId, layer: batchOp.layer, count: batchOp.targetIds.length });
   }
 
   /**
@@ -151,10 +139,7 @@ export class TransactionManager {
       throw new Error(`Transaction is not pending: ${transactionId}`);
     }
 
-    this.logger.debug('Preparing transaction', {
-      transactionId,
-      operationCount: tx.operations.length,
-    });
+    this.logger.debug('Preparing transaction', { transactionId, operationCount: tx.operations.length });
 
     tx.status = 'preparing';
 
@@ -260,10 +245,7 @@ export class TransactionManager {
       return { success: true, failedOperations: [] };
     }
 
-    this.logger.debug('Rolling back transaction', {
-      transactionId,
-      operationCount: tx.operations.length,
-    });
+    this.logger.debug('Rolling back transaction', { transactionId, operationCount: tx.operations.length });
 
     // 收集回滚失败的操作
     const failedOperations: Array<{ layer: string; targetId: string; error: string }> = [];
@@ -273,10 +255,7 @@ export class TransactionManager {
     for (const op of reversedOps) {
       try {
         await op.rollback();
-        this.logger.debug('Operation rolled back', {
-          layer: op.layer,
-          targetId: op.targetId,
-        });
+        this.logger.debug('Operation rolled back', { layer: op.layer, targetId: op.targetId.substring(0, 20) });
       } catch (error) {
         const errorMsg = String(error);
         this.logger.error('Rollback failed for operation', {

@@ -11,7 +11,7 @@
  */
 
 import { config } from '../../../shared/config';
-import { MemoryBlock, MemoryScope } from '../../../core/types/memory';
+import { MemoryBlock, MemoryScope } from '../../../types/memory';
 import type { MemoryStoreConfig } from '../../../core/types/config';
 
 /**

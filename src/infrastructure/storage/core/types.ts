@@ -9,7 +9,7 @@
  * - Palace 层级化存储
  */
 
-import type { MemoryScope, MemoryType, MemoryBlock, Memory } from '../../../core/types/memory';
+import type { MemoryScope, MemoryType, MemoryBlock, Memory } from '../../../types/memory';
 
 /**
  * Palace 位置

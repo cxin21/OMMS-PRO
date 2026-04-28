@@ -11,7 +11,7 @@
 
 import { createLogger } from '../../shared/logging';
 import type { ILogger } from '../../shared/logging';
-import type { MemoryScope, MemoryType } from '../../core/types/memory';
+import type { MemoryScope, MemoryType } from '../../types/memory';
 
 export type AccessLevel = 'none' | 'read' | 'write' | 'delete' | 'admin';
 export type AccessPrincipalType = 'agent' | 'session' | 'tag' | 'scope' | 'global';

@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { join } from 'path';
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
+import { MemoryDefaults } from '../../../config';
 
 /**
  * 分布式锁接口
@@ -35,7 +36,7 @@ export class DistributedLockManager {
   private static DEFAULT_TTL_MS = 30000;
 
   // 默认最大锁数量
-  private static DEFAULT_MAX_LOCKS = 1000;
+  private static get DEFAULT_MAX_LOCKS() { return MemoryDefaults.maxLockCount; }
 
   constructor(
     private dbPath: string,
@@ -122,11 +123,13 @@ export class DistributedLockManager {
       if (result) {
         this.logger.debug('Distributed lock acquired', { lockKey, lockValue, ttlMs: effectiveTtl });
       } else {
-        this.logger.debug('Distributed lock failed - already held', { lockKey });
+        // 锁已被持有（正常竞争情况），使用 WARN 级别记录以便追踪
+        this.logger.warn('Distributed lock failed - already held', { lockKey });
       }
 
       return result;
     } catch (error) {
+      // 数据库错误是异常情况，使用 ERROR 级别
       this.logger.error('Error acquiring distributed lock', { lockKey, error: String(error) });
       return false;
     }

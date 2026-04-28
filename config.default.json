@@ -3,6 +3,7 @@
   "agentId": "default-agent",
   "sessionPrefix": "session-",
   "projectDir": "./data/sessions",
+  "agentsDir": "./agents",
   "llmExtraction": {
     "provider": "openai-compatible",
     "model": "gpt-4o-mini",
@@ -97,6 +98,7 @@
       "summaryMaxLength": 200,
       "defaultImportance": 5,
       "defaultScopeScore": 5,
+      "defaultConfidence": 0.5,
       "scopeUpgradeThresholds": {
         "sessionToAgentImportance": 5,
         "agentToGlobalScopeScore": 10,
@@ -118,7 +120,9 @@
       "enableKeywordSearch": true,
       "vectorWeight": 0.7,
       "keywordWeight": 0.3,
-      "includeVersionChain": true
+      "includeVersionChain": true,
+      "bm25K1": 1.5,
+      "bm25B": 0.75
     },
     "forget": {
       "enabled": true,
@@ -171,6 +175,11 @@
       "directSwitchThreshold": 0.5,
       "noSwitchThreshold": 0.3,
       "useLLM": true
+    },
+    "inclusion": {
+      "defaultScore": 0.5,
+      "inclusionThreshold": 0.7,
+      "identicalThreshold": 0.95
     },
     "sentiment": {
       "enabled": true,
@@ -229,10 +238,26 @@
       "llmModel": "Doubao-Seed-2.0-pro",
       "versionLockTTLMs": 30000,
       "maxVersionLocks": 100,
+      "versionLockWaitMs": 5000,
       "contentHashCacheSize": 1000,
       "enableIncrementalCapture": true,
       "extractionTimeout": 30000,
-      "conversationThreshold": 500
+      "conversationThreshold": 500,
+      "contextExtension": 200,
+      "inclusionSimilarityThreshold": 0.7
+    },
+    "llmExtractor": {
+      "systemPrompt": "memory-extraction-system.md",
+      "extractionPrompt": "memory-extraction.md",
+      "summaryPrompt": "summary-generation.md",
+      "scoringPrompt": "scoring.md",
+      "mergingPrompt": "memory-merging.md",
+      "consolidationPrompt": "memory-consolidation.md",
+      "entityPrompt": "entity-extraction.md",
+      "focusPrompt": "focus-analysis.md",
+      "personaPrompt": "persona-extraction.md",
+      "inclusionPrompt": "inclusion-detection.md",
+      "compressionPrompt": "memory-compression.md"
     },
     "roomManager": {
       "mergeThreshold": 10,
@@ -286,6 +311,7 @@
       "archiveThreshold": 3,
       "protectLevel": 7,
       "archivedDecayMultiplier": 2.0,
+      "maxDegradationWaitMs": 60000,
       "aaakProtection": {
         "DECISION": 0.5,
         "CORE": 0.3,
@@ -331,6 +357,12 @@
     "apiKey": "",
     "batchSize": 32,
     "timeout": 30000
+  },
+  "streaming": {
+    "maxEventsPerStream": 1000,
+    "maxStreams": 100,
+    "maxSubscriptionsPerClient": 10,
+    "streamRetentionMs": 3600000
   },
   "dreamingEngine": {
     "scheduler": {

@@ -16,6 +16,7 @@ import type { GraphNodeRecord, GraphEdgeRecord } from '../../../infrastructure/s
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
+import { MemoryDefaults } from '../../../config';
 
 export interface RetryItem {
   memoryId: string;
@@ -39,7 +40,7 @@ export interface GraphRetryQueueConfig {
 
 /**
  * 获取 GraphRetryQueue 配置
- * 优先从 ConfigManager 读取，否则抛出错误
+ * 优先从 ConfigManager 读取，否则使用 MemoryDefaults
  */
 function getGraphRetryQueueConfig(): { maxRetries: number; retryDelayMs: number; graphBasePath: string } {
   let graphBasePath = './data';
@@ -52,7 +53,7 @@ function getGraphRetryQueueConfig(): { maxRetries: number; retryDelayMs: number;
   // 默认重试配置
   return {
     maxRetries: 3,
-    retryDelayMs: 5000,
+    retryDelayMs: MemoryDefaults.graphRetryDelayMs,
     graphBasePath,
   };
 }

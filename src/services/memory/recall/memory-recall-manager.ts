@@ -10,7 +10,7 @@
  * - 配置通过 ConfigManager 注入
  */
 
-import { MemoryType, MemoryScope, MemoryBlock, MemoryMetadata, VersionInfo, MemoryLifecycleEvent } from '../../../core/types/memory';
+import { MemoryType, MemoryScope, MemoryBlock, MemoryMetadata, VersionInfo, MemoryLifecycleEvent } from '../../../types/memory';
 import type {
   ICacheManager,
   IVectorStore,
@@ -34,6 +34,7 @@ import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
 import { prescreenByAAAK } from '../search/aaak-prescreen';
 import { rerankWithBM25 } from '../search/hybrid-search';
 import { getReinforcementConfig, getRecallConfig } from '../utils/memory-config-utils';
+import { MemoryDefaults } from '../../../config';
 
 // ============================================================
 // 类型定义
@@ -67,8 +68,12 @@ export interface RecallConfig {
   defaultLimit: number;
   /** 最大返回数量（默认 100） */
   maxLimit: number;
-  /** scopeScore 强化幅度（被其他Agent召回时，默认 0.6） */
+  /** scopeScore 强化幅度（被其他Agent召回时，默认 0.5） */
   scopeBoost: number;
+  /** BM25 k1 参数（默认 1.5） */
+  bm25K1: number;
+  /** BM25 b 参数（默认 0.75） */
+  bm25B: number;
 }
 
 /**
@@ -237,13 +242,15 @@ function getDefaultRecallConfig(): RecallConfig | null {
       scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],  // 固定顺序
       enableVectorSearch: recallConfig.enableVectorSearch ?? true,
       enableKeywordSearch: recallConfig.enableKeywordSearch ?? true,
-      vectorWeight: recallConfig.vectorWeight ?? 0.7,
-      keywordWeight: recallConfig.keywordWeight ?? 0.3,
-      minSimilarity: recallConfig.minScore ?? 0.5,
+      vectorWeight: recallConfig.vectorWeight ?? MemoryDefaults.vectorWeight,
+      keywordWeight: recallConfig.keywordWeight ?? MemoryDefaults.keywordWeight,
+      minSimilarity: recallConfig.minScore ?? MemoryDefaults.minScore,
       includeVersionChain: true,  // 固定值
-      defaultLimit: recallConfig.defaultLimit ?? 20,
-      maxLimit: recallConfig.maxLimit ?? 100,
-      scopeBoost: reinforcementConfig?.scopeBoost ?? 0.6,
+      defaultLimit: recallConfig.defaultLimit ?? MemoryDefaults.recallDefaultLimit,
+      maxLimit: recallConfig.maxLimit ?? MemoryDefaults.recallMaxLimit,
+      scopeBoost: reinforcementConfig?.scopeBoost ?? MemoryDefaults.scopeBoost,
+      bm25K1: (recallConfig as any).bm25K1 ?? MemoryDefaults.bm25K1,
+      bm25B: (recallConfig as any).bm25B ?? MemoryDefaults.bm25B,
     };
   } catch {
     return null;
@@ -258,13 +265,15 @@ const DEFAULT_RECALL_CONFIG: RecallConfig = {
   scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],
   enableVectorSearch: true,
   enableKeywordSearch: true,
-  vectorWeight: 0.7,
-  keywordWeight: 0.3,
-  minSimilarity: 0.5,
+  vectorWeight: MemoryDefaults.vectorWeight,
+  keywordWeight: MemoryDefaults.keywordWeight,
+  minSimilarity: MemoryDefaults.minScore,
   includeVersionChain: true,
-  defaultLimit: 20,
-  maxLimit: 100,
-  scopeBoost: 0.6,
+  defaultLimit: MemoryDefaults.recallDefaultLimit,
+  maxLimit: MemoryDefaults.recallMaxLimit,
+  scopeBoost: MemoryDefaults.scopeBoost,
+  bm25K1: MemoryDefaults.bm25K1,
+  bm25B: MemoryDefaults.bm25B,
 };
 
 // ============================================================
@@ -897,6 +906,8 @@ export class MemoryRecallManager {
         const reranked = rerankWithBM25(bm25Input, params.query, {
           vectorWeight: this.config.vectorWeight,
           bm25Weight: this.config.keywordWeight,
+          k1: this.config.bm25K1,
+          b: this.config.bm25B,
         });
 
         // 根据重排序结果调整 finalFiltered 的顺序

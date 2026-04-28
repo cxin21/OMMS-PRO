@@ -3,7 +3,7 @@
  * @module storage/vector-store
  */
 
-import type { MemoryType, MemoryScope } from '../../../core/types/memory';
+import type { MemoryType, MemoryScope } from '../../../types/memory';
 import type {
   IVectorStore,
   VectorDocument,

@@ -14,6 +14,7 @@ import type { ILogger } from '../shared/logging';
 import { config } from '../shared/config';
 import type { StreamingConfig } from '../core/types/config';
 import { IDGenerator } from '../shared/utils/id-generator';
+import { StreamingDefaults } from '../config';
 
 export type StreamStatus = 'active' | 'paused' | 'completed' | 'cancelled' | 'error';
 
@@ -139,10 +140,10 @@ export class StreamingManager {
       // 配置获取失败，使用构造函数参数或默认值
     }
 
-    this.maxEventsPerStream = userConfig?.maxEventsPerStream ?? streamingConfig?.maxEventsPerStream ?? 1000;
-    this.maxStreams = userConfig?.maxStreams ?? streamingConfig?.maxStreams ?? 100;
-    this.maxSubscriptionsPerClient = userConfig?.maxSubscriptionsPerClient ?? streamingConfig?.maxSubscriptionsPerClient ?? 10;
-    this.streamRetentionMs = userConfig?.streamRetentionMs ?? streamingConfig?.streamRetentionMs ?? 3600000;
+    this.maxEventsPerStream = userConfig?.maxEventsPerStream ?? streamingConfig?.maxEventsPerStream ?? config.getConfig<number>('streaming.maxEventsPerStream') ?? StreamingDefaults.maxEventsPerStream;
+    this.maxStreams = userConfig?.maxStreams ?? streamingConfig?.maxStreams ?? config.getConfig<number>('streaming.maxStreams') ?? StreamingDefaults.maxStreams;
+    this.maxSubscriptionsPerClient = userConfig?.maxSubscriptionsPerClient ?? streamingConfig?.maxSubscriptionsPerClient ?? config.getConfig<number>('streaming.maxSubscriptionsPerClient') ?? StreamingDefaults.maxSubscriptionsPerClient;
+    this.streamRetentionMs = userConfig?.streamRetentionMs ?? streamingConfig?.streamRetentionMs ?? config.getConfig<number>('streaming.streamRetentionMs') ?? StreamingDefaults.streamRetentionMs;
   }
 
   /**

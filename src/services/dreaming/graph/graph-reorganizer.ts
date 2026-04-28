@@ -17,7 +17,7 @@ import type {
 import type {
   ReorganizationConfig,
 } from '../types';
-import { MemoryType, PROFILE_TYPES, isProfileType } from '../../../core/types/memory';
+import { MemoryType, PROFILE_TYPES, isProfileType } from '../../../types/memory';
 
 /**
  * 图谱缺口分析结果
@@ -55,8 +55,10 @@ export class GraphReorganizer {
     this.logger = createServiceLogger('GraphReorganizer');
 
     // 默认配置
+    // densityTarget: 目标边密度 (预留，暂未使用)
     this.config = {
       minEdgeWeight: config?.minEdgeWeight ?? 0.3,
+      // TODO: densityTarget 预留用于动态调整重组策略，当前方未实现
       densityTarget: config?.densityTarget ?? 0.5,
       orphanThreshold: config?.orphanThreshold ?? 0.2,
       maxNewRelationsPerCycle: config?.maxNewRelationsPerCycle ?? 30,

@@ -14,7 +14,7 @@
  * - LLM 可直接读取，无需解码器
  */
 
-import { MemoryType } from '../../../core/types/memory';
+import { MemoryType } from '../../../types/memory';
 
 // ============================================================
 // 常量定义

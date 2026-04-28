@@ -8,7 +8,7 @@
  */
 
 // ========== 导入模块（用于内部类）==========
-import { ConfigManager } from './shared/config';
+import { ConfigManager, config } from './shared/config';
 import { ProfileManager } from './services/profile/profile-manager';
 import { MemoryService } from './services/memory/index';
 import { createLogger } from './shared/logging/context';
@@ -18,7 +18,7 @@ import { EmbeddingService } from './shared/embedding/embedding-service';
 import { DreamingManager } from './services/dreaming/dreaming-manager';
 import { createLLMExtractor } from './services/memory/llm/llm-extractor';
 import { MemoryCaptureService } from './services/memory/capture/memory-capture-service';
-import type { MemoryCaptureConfig } from './core/types/memory';
+import type { MemoryCaptureConfig } from './types/memory';
 
 // Agent 系统
 import { AgentContextProvider } from './shared/agents';
@@ -29,6 +29,7 @@ import { VectorStore } from './infrastructure/storage/stores/vector-store';
 import { SQLiteMetaStore } from './infrastructure/storage/stores/sqlite-meta-store';
 import { PalaceStore } from './infrastructure/storage/stores/palace-store';
 import { GraphStore } from './infrastructure/storage/stores/graph-store';
+import { MemoryDefaults } from './config';
 
 // ========== 导出配置模块 ==========
 export { ConfigManager, ConfigLoader, ConfigValidator } from './shared/config';
@@ -67,7 +68,7 @@ export type {
   MemoryInput,
   RecallResult,
   RecallOptions,
-} from './core/types/memory';
+} from './types/memory';
 
 // Export types from config
 export type {
@@ -196,7 +197,7 @@ export class OMMS {
 
     // 3. 创建并初始化存储模块
     const cacheConfig = this.configManager.getConfig('memoryService.cache') as { maxSize?: number; ttl?: number } | undefined;
-    this.cacheManager = new CacheManager({ maxSize: cacheConfig?.maxSize ?? 1000, ttl: cacheConfig?.ttl ?? 3600000 });
+    this.cacheManager = new CacheManager({ maxSize: cacheConfig?.maxSize ?? config.getConfig<number>('memoryService.cache.maxSize') ?? MemoryDefaults.cacheMaxSize, ttl: cacheConfig?.ttl ?? config.getConfig<number>('memoryService.cache.ttl') ?? MemoryDefaults.cacheTTL });
     this.vectorStore = new VectorStore();
     this.metaStore = new SQLiteMetaStore();
     this.palaceStore = new PalaceStore();
@@ -269,9 +270,9 @@ export class OMMS {
       if (llmConfig && llmConfig.llmProvider) {
         console.log('[OMMS] Creating LLM Extractor with provider:', llmConfig.llmProvider);
         const extractor = createLLMExtractor({
-          maxMemoriesPerCapture: llmConfig.maxMemoriesPerCapture ?? 5,
-          similarityThreshold: llmConfig.similarityThreshold ?? 0.9,
-          confidenceThreshold: llmConfig.confidenceThreshold ?? 0.5,
+          maxMemoriesPerCapture: llmConfig.maxMemoriesPerCapture ?? config.getConfig<number>('memoryService.capture.maxMemoriesPerCapture') ?? MemoryDefaults.maxMemoriesPerCapture,
+          similarityThreshold: llmConfig.similarityThreshold ?? config.getConfig<number>('memoryService.capture.similarityThreshold') ?? MemoryDefaults.similarityThreshold,
+          confidenceThreshold: llmConfig.confidenceThreshold ?? config.getConfig<number>('memoryService.capture.confidenceThreshold') ?? MemoryDefaults.confidenceThreshold,
           enableLLMSummarization: llmConfig.enableLLMSummarization ?? true,
           llmProvider: llmConfig.llmProvider as 'anthropic' | 'openai' | 'custom',
           llmApiKey: llmConfig.llmApiKey,
@@ -417,8 +418,8 @@ async function startServer(): Promise<void> {
 
   // 从配置读取 API 服务器地址
   const apiConfig = omms.configManager.getConfig('api') as { port?: number; host?: string } | undefined;
-  const port = apiConfig?.port ?? 3000;
-  const host = apiConfig?.host ?? '0.0.0.0';
+  const port = apiConfig?.port ?? config.getConfig<number>('api.port') ?? 3000;
+  const host = apiConfig?.host ?? config.getConfig<string>('api.host') ?? '0.0.0.0';
 
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => {

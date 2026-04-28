@@ -20,7 +20,7 @@ import type {
   EpisodeRecord,
   MemoryMetaRecord,
 } from '../../../infrastructure/storage/core/types';
-import { MemoryType, PROFILE_TYPES } from '../../../core/types/memory';
+import { MemoryType, PROFILE_TYPES } from '../../../types/memory';
 import type { RecallMemory } from '../recall/memory-recall-manager';
 import type { SentimentResult } from '../analysis/sentiment-analyzer';
 import { SentimentAnalyzer } from '../analysis/sentiment-analyzer';

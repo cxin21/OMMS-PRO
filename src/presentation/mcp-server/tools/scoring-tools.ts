@@ -9,6 +9,7 @@ import { createLogger } from '../../../shared/logging';
 import type { MCPTool, ToolMetadata } from '../types';
 import type { StorageMemoryService } from '../../../services/memory/core/storage-memory-service';
 import { config } from '../../../shared/config';
+import { MemoryDefaults } from '../../../config';
 
 const logger = createLogger('mcp-scoring-tools');
 
@@ -42,9 +43,9 @@ export function createScoringTools(memoryService: StorageMemoryService): Array<{
                   llmApiKey: extraction?.apiKey,
                   llmEndpoint: extraction?.baseURL,
                   llmModel: extraction?.model ?? 'claude-3-sonnet-20240229',
-                  confidenceThreshold: capture?.confidenceThreshold ?? 0.5,
-                  maxMemoriesPerCapture: capture?.maxMemoriesPerCapture ?? 5,
-                  similarityThreshold: capture?.similarityThreshold ?? 0.9,
+                  confidenceThreshold: capture?.confidenceThreshold ?? MemoryDefaults.confidenceThreshold,
+                  maxMemoriesPerCapture: capture?.maxMemoriesPerCapture ?? MemoryDefaults.maxMemoriesPerCapture,
+                  similarityThreshold: capture?.similarityThreshold ?? MemoryDefaults.similarityThreshold,
                   enableLLMSummarization: true,
                 };
               }

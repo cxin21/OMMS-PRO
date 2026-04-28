@@ -19,7 +19,7 @@ import type {
   ArchivalConfig,
   DefragmentationConfig,
 } from '../types';
-import { MemoryBlock, MemoryType, isProfileType } from '../../../core/types/memory';
+import { MemoryBlock, MemoryType, isProfileType } from '../../../types/memory';
 import { config } from '../../../shared/config';
 
 /**
