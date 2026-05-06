@@ -1,38 +1,49 @@
-# Dependencies
+# ========== 依赖 ==========
 node_modules/
 
-# Build output
+# ========== 构建产物 ==========
 dist/
 **/dist/
+*.tsbuildinfo
 
-# Runtime data
+# ========== 打包产物 (可由 scripts/package.sh 重新生成) ==========
+release/
+
+# ========== 运行时数据 (不要提交到 git) ==========
 data/
 logs/
+*.log
 
-# Config with secrets
+# ========== 配置文件 (可能包含敏感信息) ==========
 config.json
+.env
+.env.*
+.env.local
 
-# OS files
-.DS_Store
-Thumbs.db
+# ========== Claude Code 插件 ==========
+.mcp.json
 
-# IDE
+# ========== Claude Code 本地数据 ==========
+.claude/
+
+# ========== IDE ==========
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
-# Environment
-.env
-.env.*
+# ========== 操作系统 ==========
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# Temp files
+# ========== 临时文件 ==========
 *.tmp
-*.log
+*.temp
+*.bak
+*~
 
-# Claude Code local config
-.claude/
-.mcp.json
-
-# Build cache
-*.tsbuildinfo
+# ========== 包管理器锁文件 (可选) ==========
+# package-lock.json
+# yarn.lock
