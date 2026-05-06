@@ -24,6 +24,7 @@ import type {
   VectorSearchOptions,
   PalaceLocation,
 } from '../../../infrastructure/storage/core/types';
+import type { ILLMExtractor } from '../../../llm/types';
 import { createServiceLogger, wrapWithErrorBoundary } from '../../../shared/logging';
 import { PalaceStore } from '../../../infrastructure/storage/stores/palace-store';
 import type { ILogger } from '../../../shared/logging';
@@ -33,7 +34,7 @@ import { TransactionManager } from '../utils/transaction-manager';
 import { deriveBlock, shouldUpgradeScope } from '../utils/block-utils';
 import { prescreenByAAAK } from '../search/aaak-prescreen';
 import { rerankWithBM25 } from '../search/hybrid-search';
-import { getReinforcementConfig, getRecallConfig } from '../utils/memory-config-utils';
+import { getReinforcementConfig, getRecallConfig, getAAAKConfig } from '../utils/memory-config-utils';
 import { MemoryDefaults } from '../../../config';
 
 // ============================================================
@@ -205,6 +206,12 @@ export interface RecallOutput {
     vector: number[];
     combined: number[];
   };
+  /** LLM 整理后的摘要（可选） */
+  consolidatedSummary?: {
+    summary: string;
+    keywords: string[];
+    insights: string[];
+  };
 }
 
 /**
@@ -222,60 +229,6 @@ export interface RecallStats {
 // 所有配置必须从 ConfigManager 读取，禁止硬编码
 // ============================================================
 
-/**
- * 获取召回配置的默认值（延迟初始化）
- * 仅在 ConfigManager 已初始化时调用
- */
-function getDefaultRecallConfig(): RecallConfig | null {
-  if (!config.isInitialized()) {
-    return null;
-  }
-
-  try {
-    const recallConfig = config.getConfigOrThrow<MemoryRecallConfig>('memoryService.recall');
-    const reinforcementConfig = config.getConfigOrThrow<any>('memoryService.reinforcement');
-
-    return {
-      minMemories: 3,  // 非配置参数，保持默认值
-      maxMemories: 20,  // 非配置参数，保持默认值
-      minImportanceRatio: 0.6,  // 非配置参数，保持默认值
-      scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],  // 固定顺序
-      enableVectorSearch: recallConfig.enableVectorSearch ?? true,
-      enableKeywordSearch: recallConfig.enableKeywordSearch ?? true,
-      vectorWeight: recallConfig.vectorWeight ?? MemoryDefaults.vectorWeight,
-      keywordWeight: recallConfig.keywordWeight ?? MemoryDefaults.keywordWeight,
-      minSimilarity: recallConfig.minScore ?? MemoryDefaults.minScore,
-      includeVersionChain: true,  // 固定值
-      defaultLimit: recallConfig.defaultLimit ?? MemoryDefaults.recallDefaultLimit,
-      maxLimit: recallConfig.maxLimit ?? MemoryDefaults.recallMaxLimit,
-      scopeBoost: reinforcementConfig?.scopeBoost ?? MemoryDefaults.scopeBoost,
-      bm25K1: (recallConfig as any).bm25K1 ?? MemoryDefaults.bm25K1,
-      bm25B: (recallConfig as any).bm25B ?? MemoryDefaults.bm25B,
-    };
-  } catch {
-    return null;
-  }
-}
-
-// 临时默认值，在构造函数中会被正确配置替换
-const DEFAULT_RECALL_CONFIG: RecallConfig = {
-  minMemories: 3,
-  maxMemories: 20,
-  minImportanceRatio: 0.6,
-  scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],
-  enableVectorSearch: true,
-  enableKeywordSearch: true,
-  vectorWeight: MemoryDefaults.vectorWeight,
-  keywordWeight: MemoryDefaults.keywordWeight,
-  minSimilarity: MemoryDefaults.minScore,
-  includeVersionChain: true,
-  defaultLimit: MemoryDefaults.recallDefaultLimit,
-  maxLimit: MemoryDefaults.recallMaxLimit,
-  scopeBoost: MemoryDefaults.scopeBoost,
-  bm25K1: MemoryDefaults.bm25K1,
-  bm25B: MemoryDefaults.bm25B,
-};
-
 // ============================================================
 // MemoryRecallManager
 // ============================================================
@@ -287,6 +240,7 @@ const DEFAULT_RECALL_CONFIG: RecallConfig = {
 export class MemoryRecallManager {
   private logger: ILogger;
   private config: RecallConfig;
+  private llmExtractor?: ILLMExtractor;
   private reinforcementConfig!: {
     lowBoostThreshold: number;
     mediumBoostThreshold: number;
@@ -304,29 +258,59 @@ export class MemoryRecallManager {
     private graphStore: IGraphStore,
     private cacheManager: ICacheManager,
     private embedder: (text: string) => Promise<number[]>,
-    userConfig?: Partial<RecallConfig>
+    userConfig?: Partial<RecallConfig>,
+    llmExtractor?: ILLMExtractor
   ) {
+    this.llmExtractor = llmExtractor;
     this.logger = createServiceLogger('MemoryRecallManager');
 
     // 如果传入了配置则使用，否则从 ConfigManager 获取
     if (userConfig && Object.keys(userConfig).length > 0) {
-      this.config = { ...DEFAULT_RECALL_CONFIG, ...userConfig };
+      // P1 FIX: 不再使用 DEFAULT_RECALL_CONFIG，直接使用 getRecallConfig 的结果
+      const defaultConfig = getRecallConfig();
+      const reinforcementConfig = getReinforcementConfig();
+      // 构建完整配置，确保必填字段不会被 userConfig 的部分覆盖设为 undefined
+      // 注意：scopePriority, includeVersionChain, scopeBoost 是固定值，不从 userConfig 覆盖
+      const mergedConfig: RecallConfig = {
+        minMemories: userConfig.minMemories ?? defaultConfig.minMemories,
+        maxMemories: userConfig.maxMemories ?? defaultConfig.maxMemories,
+        minImportanceRatio: userConfig.minImportanceRatio ?? defaultConfig.minImportanceRatio,
+        scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],
+        enableVectorSearch: userConfig.enableVectorSearch ?? defaultConfig.enableVectorSearch,
+        enableKeywordSearch: userConfig.enableKeywordSearch ?? defaultConfig.enableKeywordSearch,
+        vectorWeight: userConfig.vectorWeight ?? defaultConfig.vectorWeight,
+        keywordWeight: userConfig.keywordWeight ?? defaultConfig.keywordWeight,
+        minSimilarity: userConfig.minSimilarity ?? defaultConfig.minScore,
+        includeVersionChain: true,
+        defaultLimit: userConfig.defaultLimit ?? defaultConfig.defaultLimit,
+        maxLimit: userConfig.maxLimit ?? defaultConfig.maxLimit,
+        scopeBoost: reinforcementConfig.scopeBoost,
+        bm25K1: userConfig.bm25K1 ?? defaultConfig.bm25K1,
+        bm25B: userConfig.bm25B ?? defaultConfig.bm25B,
+      };
+      this.config = mergedConfig;
       this.logger.info('MemoryRecallManager using user-provided config', { config: this.config });
     } else {
       // 从 ConfigManager 获取配置（使用集中化的配置读取函数）
-      this.config = { ...DEFAULT_RECALL_CONFIG };
       const recallConfig = getRecallConfig();
       const reinforcementConfig = getReinforcementConfig();
 
       this.config = {
-        ...this.config,
         defaultLimit: recallConfig.defaultLimit,
         maxLimit: recallConfig.maxLimit,
         enableVectorSearch: recallConfig.enableVectorSearch,
         enableKeywordSearch: recallConfig.enableKeywordSearch,
         vectorWeight: recallConfig.vectorWeight,
         keywordWeight: recallConfig.keywordWeight,
+        minSimilarity: recallConfig.minScore,
+        minMemories: recallConfig.minMemories,
+        maxMemories: recallConfig.maxMemories,
+        minImportanceRatio: recallConfig.minImportanceRatio,
+        bm25K1: recallConfig.bm25K1,
+        bm25B: recallConfig.bm25B,
         scopeBoost: reinforcementConfig.scopeBoost,
+        scopePriority: [MemoryScope.SESSION, MemoryScope.AGENT, MemoryScope.GLOBAL],
+        includeVersionChain: true,
       };
       this.reinforcementConfig = {
         lowBoostThreshold: reinforcementConfig.lowBoostThreshold,
@@ -343,6 +327,14 @@ export class MemoryRecallManager {
     // Note: wrapWithErrorBoundary is not applied to the recall method directly
     // to avoid recursive wrapping. Use wrapWithErrorBoundary at the call site instead.
     // this.recall = wrapWithErrorBoundary(this.logger, 'MemoryRecallManager.recall', this.recall.bind(this)) as any;
+  }
+
+  /**
+   * 设置 LLM Extractor
+   */
+  setLLMExtractor(extractor: ILLMExtractor): void {
+    this.llmExtractor = extractor;
+    this.logger.info('LLM Extractor configured for MemoryRecallManager');
   }
 
   // 缓存预热 Promise 追踪（防止并发重复预热）
@@ -393,7 +385,7 @@ export class MemoryRecallManager {
     this.logger.info('Step 1 (session) completed', { found: step1Found.memories.length, total: result.memories.length });
 
     if (result.memories.length >= this.config.minMemories) {
-      return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
+      return await this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
     // Step 2: 当前Agent记忆
@@ -419,7 +411,7 @@ export class MemoryRecallManager {
     this.logger.info('Step 2 (agent) completed', { found: step2aFound.memories.length + step2bFound.memories.length, total: result.memories.length });
 
     if (result.memories.length >= this.config.minMemories) {
-      return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
+      return await this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
     // Step 3: 全局记忆
@@ -435,7 +427,7 @@ export class MemoryRecallManager {
     this.logger.info('Step 3 (global) completed', { found: step3Found.memories.length, total: result.memories.length });
 
     if (result.memories.length >= this.config.minMemories) {
-      return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
+      return await this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
     }
 
     // Step 4: 其他Agent记忆
@@ -450,19 +442,19 @@ export class MemoryRecallManager {
     result.recallPath.push({ scope: 'OTHER_AGENTS', step: 4, found: step4Found.memories.length, totalAfterStep: result.memories.length });
     this.logger.info('Step 4 (other agents) completed', { found: step4Found.memories.length, total: result.memories.length });
 
-    return this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
+    return await this.finalizeResult(result, recalledUids, limit, input, input.currentAgentId);
   }
 
   /**
    * 封装最终处理逻辑
    */
-  private finalizeResult(
+  private async finalizeResult(
     result: RecallOutput,
     recalledUids: Set<string>,
     limit: number,
     input: RecallInput,
     currentAgentId: string
-  ): RecallOutput {
+  ): Promise<RecallOutput> {
     // 应用重要性过滤
     result.memories = this.filterByImportance(result.memories);
 
@@ -502,6 +494,26 @@ export class MemoryRecallManager {
     this.warmupCache(result.memories)
       .catch(error => this.logger.warn('Cache warmup failed', { error: String(error) }));
 
+    // LLM 整理记忆（同步调用，等待完成）
+    // 注意：必须等待完成后再返回，否则 hook 获取不到整理结果
+    if (this.llmExtractor && result.memories.length > 0) {
+      const memoriesToConsolidate = result.memories.map(m => m.content);
+      try {
+        const consolidated = await this.llmExtractor.consolidateMemories(memoriesToConsolidate, input.query);
+        result.consolidatedSummary = {
+          summary: consolidated.summary,
+          keywords: consolidated.keywords,
+          insights: consolidated.insights,
+        };
+        this.logger.debug('LLM consolidation completed', {
+          summaryLength: consolidated.summary.length,
+          keywordsCount: consolidated.keywords.length,
+        });
+      } catch (error) {
+        this.logger.warn('LLM consolidation failed', { error: String(error) });
+      }
+    }
+
     this.logger.info('Recall completed', {
       totalFound: result.totalFound,
       meetsMinimum: result.meetsMinimum,
@@ -523,18 +535,38 @@ export class MemoryRecallManager {
 
     const now = Date.now();
 
-    // 并行获取元数据和向量
+    // 先检查 L1 缓存，找出缓存命中和未命中的 UID
+    const cachedResults: RecallMemory[] = [];
+    const missedUids: string[] = [];
+    const cacheEntries = await this.cacheManager.getMany(uids);
+    for (const uid of uids) {
+      const entry = cacheEntries.get(uid);
+      if (entry) {
+        cachedResults.push(entry as unknown as RecallMemory);
+      } else {
+        missedUids.push(uid);
+      }
+    }
+
+    // 全部命中缓存 → 直接返回
+    if (missedUids.length === 0) {
+      this.logger.debug('All memories found in cache', { count: cachedResults.length });
+      return cachedResults;
+    }
+
+    // 并行获取未命中缓存的元数据和向量
     const [metas, vectors] = await Promise.all([
-      this.metaStore.getByIds(uids),
-      this.vectorStore.getByIds(uids),
+      this.metaStore.getByIds(missedUids),
+      this.vectorStore.getByIds(missedUids),
     ]);
 
     if (metas.length === 0) {
-      return [];
+      // 没有数据库中的匹配 → 仅返回缓存命中结果
+      return cachedResults;
     }
 
-    // 异步更新召回时间戳和召回次数（不阻塞返回）
-    this.updateRecallStats(uids, now).catch(error =>
+    // 异步更新召回时间戳（仅更新未命中缓存的部分，不阻塞返回）
+    this.updateRecallStats(missedUids, now).catch(error =>
       this.logger.warn('Failed to update recall stats', { error: String(error) })
     );
 
@@ -586,7 +618,9 @@ export class MemoryRecallManager {
       });
     }
 
-    return this.enrichMemories(vectorResults, metas, '');
+    const enrichedResults = await this.enrichMemories(vectorResults, metas, '');
+    // 合并缓存命中结果和数据库查询结果
+    return [...cachedResults, ...enrichedResults];
   }
 
   /**
@@ -602,18 +636,20 @@ export class MemoryRecallManager {
    * 因为"访问"和"召回"在当前实现中是等价的 - 每次访问记忆都是通过召回流程。
    * 如果未来需要支持"访问但不计入召回"的场景，需要扩展 MemoryMetaRecord schema。
    */
+  /**
+   * 更新召回统计（仅设置 lastRecalledAt，不递增 recallCount）
+   * recallCount 的递增统一在 applyReinforcement() 中处理，避免重复计数
+   */
   private async updateRecallStats(uids: string[], now: number): Promise<void> {
     try {
       const metas = await this.metaStore.getByIds(uids);
       const updatePromises = metas.map(meta => {
-        const newRecallCount = (meta.recallCount || 0) + 1;
         return this.metaStore.update(meta.uid, {
           lastRecalledAt: now,
-          recallCount: newRecallCount,
         });
       });
       await Promise.all(updatePromises);
-      this.logger.debug('Updated recall stats', { count: uids.length });
+      this.logger.debug('Updated recall stats (lastRecalledAt)', { count: uids.length });
     } catch (error) {
       this.logger.warn('Failed to update recall stats', { error: String(error) });
     }
@@ -791,9 +827,10 @@ export class MemoryRecallManager {
       return { memories: [] };
     }
 
-    // 2. 过滤已排除的 UID
+    // 2. 过滤已排除的 UID（使用 Set 实现 O(1) 查找，避免 O(n*m)）
+    const excludeSet = new Set(params.excludeUids);
     const filteredCandidates = candidates.filter(
-      (c) => !params.excludeUids.includes(c.uid)
+      (c) => !excludeSet.has(c.uid)
     );
 
     if (filteredCandidates.length === 0) {
@@ -803,19 +840,23 @@ export class MemoryRecallManager {
     // ============================================================
     // AAAK 预筛选：使用 AAAK 格式快速过滤和排序候选记忆
     // 在向量搜索之前进行，可以减少向量搜索的候选数量
+    // P1 FIX: 检查 AAAK 配置的 enabled 开关
     // ============================================================
     let prescreenedCandidateUids: string[];
-    if (params.query && params.query.trim().length > 0) {
+    const aaakConfig = getAAAKConfig();
+    if (aaakConfig.enabled && params.query && params.query.trim().length > 0) {
       try {
         // 使用 AAAK 预筛选对候选进行排序
         prescreenedCandidateUids = await prescreenByAAAK(
           params.query,
           filteredCandidates.map(c => c.uid),
-          this.metaStore
+          this.metaStore,
+          aaakConfig.minScore
         );
         this.logger.debug('AAAK prescreening applied', {
           originalCount: filteredCandidates.length,
           queryLength: params.query.length,
+          minScore: aaakConfig.minScore,
         });
       } catch (aaakError) {
         // AAAK 预筛选失败时，回退到使用原始候选列表
@@ -825,7 +866,11 @@ export class MemoryRecallManager {
         prescreenedCandidateUids = filteredCandidates.map(c => c.uid);
       }
     } else {
-      // 无查询文本时，按重要性排序
+      // AAAK 禁用或无查询文本时，按重要性排序
+      this.logger.debug('AAAK prescreening skipped', {
+        enabled: aaakConfig.enabled,
+        hasQuery: !!params.query,
+      });
       prescreenedCandidateUids = filteredCandidates
         .sort((a, b) => b.importanceScore - a.importanceScore)
         .map(c => c.uid);
@@ -1071,10 +1116,8 @@ export class MemoryRecallManager {
     }
 
     try {
-      // 1. 批量获取所有记忆的相关记忆
-      const allRelatedResults = await Promise.all(
-        uids.map(uid => this.graphStore.findRelated(uid, 5))
-      );
+      // 1. 使用批量接口获取所有记忆的相关记忆（优化：用 findRelatedBatch 替代 N 次独立查询）
+      const allRelatedMap = await this.graphStore.findRelatedBatch(uids, 5);
 
       // 2. 批量获取所有记忆的图谱边
       const allEdgesResults = await Promise.all(
@@ -1094,7 +1137,6 @@ export class MemoryRecallManager {
       const allEntitiesResults = new Map<string, GraphNodeRecord | null>();
       if (allNodeIdsToQuery.size > 0) {
         const uniqueNodeIds = Array.from(allNodeIdsToQuery);
-        // 使用批量查询接口替代 N 个独立查询
         const entitiesMap = await this.graphStore.getEntitiesByIds(uniqueNodeIds);
         for (const [nodeId, entity] of entitiesMap) {
           allEntitiesResults.set(nodeId, entity);
@@ -1104,7 +1146,7 @@ export class MemoryRecallManager {
       // 5. 组装每个记忆的关联关系
       for (let i = 0; i < uids.length; i++) {
         const uid = uids[i];
-        const related = allRelatedResults[i];
+        const related = allRelatedMap.get(uid) || [];
         const edges = allEdgesResults[i];
 
         // 获取相关实体
@@ -1289,42 +1331,6 @@ export class MemoryRecallManager {
   }
 
   /**
-   * @deprecated 已废弃。请使用 StorageMemoryService.checkAndUpgradeScope() 或
-   *             degradationManager.upgradeScope() 进行作用域升级。
-   *             此方法不再执行实际升级操作，仅保留用于向后兼容。
-   */
-  private async updateAndUpgradeScope(
-    _uid: string,
-    _currentScope: MemoryScope,
-    _newScope: MemoryScope,
-    _agentId: string,
-    _sessionId: string | undefined,
-    _newImportance: number,
-    _newScopeScore: number,
-    _newRecallCount: number,
-    _now: number,
-    _currentAgentId: string,
-    _newUsedByAgents?: string[]
-  ): Promise<void> {
-    // 此方法已废弃，作用域升级统一由 degradationManager 处理
-    this.logger.warn('updateAndUpgradeScope is deprecated, use degradationManager.upgradeScope instead');
-  }
-
-  /**
-   * 计算 Wing ID
-   */
-  private calculateWingId(scope: MemoryScope, agentId: string, sessionId?: string): string {
-    switch (scope) {
-      case MemoryScope.SESSION:
-        return `session_${sessionId || 'default'}`;
-      case MemoryScope.AGENT:
-        return `agent_${agentId}`;
-      case MemoryScope.GLOBAL:
-        return 'global';
-    }
-  }
-
-  /**
    * 计算重要性强化幅度
    * 根据当前重要性值和距上次召回的时间，动态计算强化幅度
    *
@@ -1357,7 +1363,8 @@ export class MemoryRecallManager {
         boost = boost * 0.2;
       } else if (cappedHours > 1) {
         // 1-24 小时之间，线性衰减到 50%
-        const decayRate = 0.5 - (cappedHours - 1) * (0.5 / 23);
+        // 修正公式: decayRate 从 1.0 (1小时) 到 0.5 (24小时)
+        const decayRate = 1.0 - (cappedHours - 1) * (0.5 / 23);
         boost = boost * Math.max(0.2, decayRate);
       }
       // < 1 小时，全额强化

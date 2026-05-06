@@ -9,7 +9,7 @@
  * @module storage/memory-access-control
  */
 
-import { createLogger } from '../../shared/logging';
+import { createServiceLogger } from '../../shared/logging';
 import type { ILogger } from '../../shared/logging';
 import type { MemoryScope, MemoryType } from '../../types/memory';
 
@@ -84,7 +84,7 @@ export class MemoryAccessControl {
   }> = [];
 
   constructor(private config: MemoryAccessControlConfig) {
-    this.logger = createLogger('MemoryAccessControl');
+    this.logger = createServiceLogger('MemoryAccessControl');
   }
 
   /**
@@ -427,18 +427,14 @@ export class MemoryAccessControl {
   }
 
   private matchAction(policy: AccessPolicy, action: AccessLevel): boolean {
-    // For deny policies, they apply to the action
-    // For allow policies, we check if the requested action is permitted
-    const actionHierarchy: AccessLevel[] = ['none', 'read', 'write', 'delete', 'admin'];
-    const policyAction = policy.effect === 'allow' ? 'admin' : 'none';
-
-    // Simple check: if policy is allow, it allows all actions <= write
-    if (policy.effect === 'allow') {
-      return actionHierarchy.indexOf(action) <= actionHierarchy.indexOf('write');
+    // Deny policies match all actions — they are applied to deny the request
+    if (policy.effect === 'deny') {
+      return true;
     }
 
-    // For deny policies, deny the action (return false)
-    return false;
+    // For allow policies, check if the requested action is within the permitted range
+    const actionHierarchy: AccessLevel[] = ['none', 'read', 'write', 'delete', 'admin'];
+    return actionHierarchy.indexOf(action) <= actionHierarchy.indexOf('write');
   }
 
   private matchCondition(condition: AccessCondition, context: AccessCheckContext): boolean {
@@ -465,7 +461,25 @@ export class MemoryAccessControl {
         fieldValue = context.customContext?.[field];
     }
 
-    return this.evaluateOperator(operator, fieldValue, value);
+    // Resolve template variables in the condition value (e.g. ${agentId} → actual agentId)
+    const resolvedValue = this.resolveTemplateValue(value, context);
+
+    return this.evaluateOperator(operator, fieldValue, resolvedValue);
+  }
+
+  /**
+   * Resolve template variables in condition values.
+   * Supports ${agentId}, ${sessionId} placeholders in policy conditions.
+   */
+  private resolveTemplateValue(value: unknown, context: AccessCheckContext): unknown {
+    if (typeof value !== 'string') return value;
+    return value.replace(/\$\{(\w+)\}/g, (_, varName: string) => {
+      switch (varName) {
+        case 'agentId': return context.agentId;
+        case 'sessionId': return context.sessionId || '';
+        default: return `\${${varName}}`;
+      }
+    });
   }
 
   private evaluateOperator(operator: AccessCondition['operator'], fieldValue: unknown, conditionValue: unknown): boolean {

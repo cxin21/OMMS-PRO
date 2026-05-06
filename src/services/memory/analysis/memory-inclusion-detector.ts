@@ -25,6 +25,10 @@ export interface InclusionDetectorConfig {
   llmEndpoint?: string;
   llmModel?: string;
   llmProvider?: 'openai' | 'anthropic' | 'custom';
+  /** LLM API 版本（Anthropic 专用），从 llmExtraction 配置读取 */
+  llmApiVersion?: string;
+  /** LLM 最大 Token 数（Inclusion 检测专用），从 llmExtraction 配置读取 */
+  llmMaxTokens?: number;
   /** 包含度阈值：低于此值认为不相关 */
   inclusionThreshold?: number;
   /** 包含度阈值：高于此值认为相同 */
@@ -72,6 +76,8 @@ export class MemoryInclusionDetector {
       llmProvider: (llmConfig['provider'] as InclusionDetectorConfig['llmProvider']) ?? 'custom',
       inclusionThreshold: (inclusionConfig?.['inclusionThreshold'] as number | undefined) ?? MemoryDefaults.inclusionThreshold,
       identicalThreshold: (inclusionConfig?.['identicalThreshold'] as number | undefined) ?? MemoryDefaults.identicalThreshold,
+      llmMaxTokens: (llmConfig['maxTokens'] as number) ?? 1024,
+      llmApiVersion: (llmConfig['apiVersion'] as string) ?? '2023-06-01',
     } as Required<InclusionDetectorConfig>;
   }
 
@@ -185,18 +191,17 @@ export class MemoryInclusionDetector {
    */
   private async callAnthropic(body: Record<string, unknown>, prompt: string): Promise<string> {
     const url = `${this.config.llmEndpoint || 'https://api.anthropic.com/v1'}/messages`;
-    const apiVersion = '2023-06-01';
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.config.llmApiKey ?? '',
-        'anthropic-version': apiVersion,
+        'anthropic-version': this.config.llmApiVersion ?? '2023-06-01',
       },
       body: JSON.stringify({
         model: this.config.llmModel,
-        max_tokens: 1024,
+        max_tokens: this.config.llmMaxTokens ?? 1024,
         messages: [{ role: 'user', content: prompt }],
       }),
     });

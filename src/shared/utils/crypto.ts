@@ -31,7 +31,7 @@ const cryptoCreateVerify = createVerify;
  * ```
  */
 export class CryptoUtils {
-  private static defaultAlgorithm = 'sha256';
+  private static defaultAlgorithm: string = 'sha256'; // Sensible default; individual calls may override
   private static defaultEncoding: 'hex' | 'base64' = 'hex';
 
   /**

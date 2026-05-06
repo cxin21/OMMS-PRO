@@ -72,8 +72,8 @@ export class LanceDBBackend implements IVectorStorageBackend {
 
     try {
       // Dynamic import for LanceDB
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const lancedb = require('lancedb');
+      const lancedbModule = await import('@lancedb/lancedb');
+      const lancedb = lancedbModule.default ?? lancedbModule;
 
       // Connect to the database
       this.db = await lancedb.connect(this.config.dbPath, this.config.connectionOptions);
@@ -344,11 +344,14 @@ export class LanceDBBackend implements IVectorStorageBackend {
       // 查询失败不影响写入
     }
 
+    // KV-only storage: use zero vector since this is not a semantic search entry.
+    // Metadata includes _kv marker so search can filter these out.
+    const metaWithMarker = { ...(value as Record<string, unknown>), _kv: true, _storedAt: Date.now() };
     await this.table.add([
       {
         id: key,
         vector: new Array(this.config.dimension).fill(0),
-        metadata: value,
+        metadata: metaWithMarker,
       },
     ]);
   }

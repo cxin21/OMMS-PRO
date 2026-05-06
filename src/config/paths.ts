@@ -46,7 +46,7 @@ export const ConfigPaths = {
   embedding: 'embedding',
 
   // Agent 系统配置路径
-  agents: 'agents',
+  agentsDir: 'agentsDir',
 
   // API 配置路径
   api: 'api',
@@ -63,8 +63,6 @@ export const ConfigPaths = {
   // Dreaming Engine 配置路径
   dreamingEngine: 'dreamingEngine',
 
-  // Capture（顶级配置）
-  capture: 'capture',
 } as const;
 
 /**

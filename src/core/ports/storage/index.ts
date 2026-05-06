@@ -6,7 +6,7 @@
  * @module ports/storage
  */
 
-import type { Memory } from '../../types/memory';
+import type { Memory } from '../../../types/memory';
 import type { CacheStats } from './types';
 import type {
   VectorDocument,

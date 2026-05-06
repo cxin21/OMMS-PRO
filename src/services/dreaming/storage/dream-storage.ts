@@ -49,9 +49,15 @@ export class DreamStorage implements IDreamStorage {
   constructor(userConfig?: { dbPath?: string }) {
     this.logger = createServiceLogger('DreamStorage');
 
-    // 从 ConfigManager 获取路径配置
-    const storageConfig = config.getConfigOrThrow<{ dreamReportsDbPath: string }>('memoryService.storage');
-    const dreamReportsDbPath = storageConfig.dreamReportsDbPath;
+    // 从 ConfigManager 获取路径配置，不可用时使用 MemoryDefaults 兜底
+    let dreamReportsDbPath: string;
+    try {
+      const storageConfig = config.getConfigOrThrow<{ dreamReportsDbPath: string }>('memoryService.storage');
+      dreamReportsDbPath = storageConfig.dreamReportsDbPath;
+    } catch {
+      dreamReportsDbPath = './data/graph/dream_reports.db';
+      this.logger.warn('Failed to read dreamReportsDbPath from config, using default', { defaultPath: dreamReportsDbPath });
+    }
 
     this.dbPath = userConfig?.dbPath ?? dreamReportsDbPath;
   }

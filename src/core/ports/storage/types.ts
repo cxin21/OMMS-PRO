@@ -6,7 +6,7 @@
  * @module ports/storage/types
  */
 
-import type { MemoryScope, MemoryType } from '../../types/memory';
+import type { MemoryScope, MemoryType } from '../../../types/memory';
 
 // ============================================================
 // Palace Types
@@ -177,7 +177,7 @@ export interface SQLiteQueryOptions {
   scopes?: MemoryScope[];
   type?: MemoryType;
   types?: MemoryType[];
-  block?: import('../../types/memory').MemoryBlock;
+  block?: import('../../../types/memory').MemoryBlock;
   tags?: string[];
   minImportance?: number;
   maxImportance?: number;

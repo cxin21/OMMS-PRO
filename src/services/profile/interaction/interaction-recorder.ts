@@ -20,7 +20,7 @@ import type {
   UserStats,
 } from '../types';
 
-const MEMORY_LOAD_LIMIT = 1000;
+const MEMORY_LOAD_LIMIT = 1000; // Aligned with config.default.json: memoryService.cache.maxSize
 
 /**
  * 交互记录器类

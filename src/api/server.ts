@@ -6,7 +6,6 @@
 
 import express, { Application } from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createLogger, type ILogger } from '../shared/logging';
 import type { RESTAPIConfig } from './types';
 import { setupRouter, type RouterDeps } from './router';
@@ -44,7 +43,7 @@ export class RESTAPIServer {
     let loggingConfig: any = { ...this.config.logging };
     try {
       if (config.isInitialized()) {
-        const globalLogging = config.getConfig('logging') as any;
+        const globalLogging = config.getConfig<{ filePath?: string; level?: string; maxSize?: number; maxFiles?: number }>('logging');
         if (globalLogging?.filePath) {
           loggingConfig.filePath = globalLogging.filePath;
         }

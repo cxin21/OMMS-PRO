@@ -10,6 +10,7 @@
 import { createServiceLogger } from '../../../shared/logging';
 import type { ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
+import crypto from 'node:crypto';
 import type { CaptureInput } from '../../../types/memory';
 
 /**
@@ -218,7 +219,6 @@ export function computeContentHash(content: string): string {
 
   try {
     // Node.js 环境
-    const crypto = require('crypto');
     hashHex = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
   } catch {
     // 浏览器环境（fallback）

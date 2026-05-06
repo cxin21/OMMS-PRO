@@ -7,6 +7,7 @@
 
 import { createServiceLogger, type ILogger } from '../../shared/logging';
 import { config } from '../../shared/config';
+import { MemoryDefaults } from '../../config';
 import { FileUtils } from '../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
@@ -51,14 +52,14 @@ export class ProfileCache {
   constructor(options?: ProfileCacheOptions) {
     this.logger = createServiceLogger('ProfileCache');
 
-    // Try to read cache config from ConfigManager
-    let cacheMaxSize = 1000;
-    let cacheTtl = 5 * 60 * 1000;
+    // Read cache config from ConfigManager with MemoryDefaults fallback
+    let cacheMaxSize: number = MemoryDefaults.cacheMaxSize;
+    let cacheTtl: number = MemoryDefaults.cacheTTL;
     try {
-      const cacheConfig = config.getConfig<{ maxSize: number; ttl: number }>('memoryService.cache');
+      const cacheConfig = config.getConfig<{ maxSize?: number; ttl?: number }>('memoryService.cache');
       if (cacheConfig) {
-        cacheMaxSize = cacheConfig.maxSize ?? cacheMaxSize;
-        cacheTtl = cacheConfig.ttl ?? cacheTtl;
+        cacheMaxSize = cacheConfig.maxSize ?? MemoryDefaults.cacheMaxSize;
+        cacheTtl = cacheConfig.ttl ?? MemoryDefaults.cacheTTL;
       }
     } catch {
       // ConfigManager not initialized yet, will use defaults
@@ -372,32 +373,6 @@ export class ProfileCache {
     return entry.value;
   }
 
-  /**
-   * Synchronous getPersona (backward compatibility)
-   */
-  getPersonaSync(userId: string): Persona | undefined {
-    const entry = this.personaCache.get(userId);
-
-    if (!entry) {
-      this.stats.misses++;
-      return undefined;
-    }
-
-    if (Date.now() - entry.lastAccess > this.options.ttl) {
-      this.personaCache.delete(userId);
-      this.expireSQLite(userId, 'persona');
-      this.stats.misses++;
-      this.logger.debug(`Persona cache miss for ${userId} (expired)`);
-      return undefined;
-    }
-
-    entry.accessCount++;
-    entry.lastAccess = Date.now();
-    this.stats.hits++;
-
-    this.logger.debug(`Persona cache hit for ${userId}`);
-    return entry.value;
-  }
 
   /**
    * 设置 Persona
@@ -452,32 +427,6 @@ export class ProfileCache {
     return entry.value;
   }
 
-  /**
-   * Synchronous getPreferences (backward compatibility)
-   */
-  getPreferencesSync(userId: string): UserPreferences | undefined {
-    const entry = this.preferencesCache.get(userId);
-
-    if (!entry) {
-      this.stats.misses++;
-      return undefined;
-    }
-
-    if (Date.now() - entry.lastAccess > this.options.ttl) {
-      this.preferencesCache.delete(userId);
-      this.expireSQLite(userId, 'preferences');
-      this.stats.misses++;
-      this.logger.debug(`Preferences cache miss for ${userId} (expired)`);
-      return undefined;
-    }
-
-    entry.accessCount++;
-    entry.lastAccess = Date.now();
-    this.stats.hits++;
-
-    this.logger.debug(`Preferences cache hit for ${userId}`);
-    return entry.value;
-  }
 
   /**
    * 设置偏好
@@ -532,32 +481,6 @@ export class ProfileCache {
     return entry.value;
   }
 
-  /**
-   * Synchronous getTags (backward compatibility)
-   */
-  getTagsSync(userId: string): UserTag[] | undefined {
-    const entry = this.tagsCache.get(userId);
-
-    if (!entry) {
-      this.stats.misses++;
-      return undefined;
-    }
-
-    if (Date.now() - entry.lastAccess > this.options.ttl) {
-      this.tagsCache.delete(userId);
-      this.expireSQLite(userId, 'tags');
-      this.stats.misses++;
-      this.logger.debug(`Tags cache miss for ${userId} (expired)`);
-      return undefined;
-    }
-
-    entry.accessCount++;
-    entry.lastAccess = Date.now();
-    this.stats.hits++;
-
-    this.logger.debug(`Tags cache hit for ${userId}`);
-    return entry.value;
-  }
 
   /**
    * 设置标签
@@ -612,32 +535,6 @@ export class ProfileCache {
     return entry.value;
   }
 
-  /**
-   * Synchronous getUserStats (backward compatibility)
-   */
-  getUserStatsSync(userId: string): UserStats | undefined {
-    const entry = this.statsCache.get(userId);
-
-    if (!entry) {
-      this.stats.misses++;
-      return undefined;
-    }
-
-    if (Date.now() - entry.lastAccess > this.options.ttl) {
-      this.statsCache.delete(userId);
-      this.expireSQLite(userId, 'stats');
-      this.stats.misses++;
-      this.logger.debug(`Stats cache miss for ${userId} (expired)`);
-      return undefined;
-    }
-
-    entry.accessCount++;
-    entry.lastAccess = Date.now();
-    this.stats.hits++;
-
-    this.logger.debug(`Stats cache hit for ${userId}`);
-    return entry.value;
-  }
 
   /**
    * 设置统计

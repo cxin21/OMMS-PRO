@@ -36,8 +36,8 @@ export function createScoringTools(memoryService: StorageMemoryService): Array<{
             let llmConfig: any = {};
             try {
               if (config.isInitialized()) {
-                const extraction = config.getConfig('llmExtraction') as any;
-                const capture = config.getConfig('memoryService.capture') as any;
+                const extraction = config.getConfig<{ provider?: string; model?: string; apiKey?: string; baseURL?: string; temperature?: number; maxTokens?: number; timeout?: number }>('llmExtraction');
+                const capture = config.getConfig<{ maxMemoriesPerCapture?: number; similarityThreshold?: number; confidenceThreshold?: number; enableLLMSummarization?: boolean; llmProvider?: string; llmApiKey?: string; llmEndpoint?: string; llmModel?: string }>('memoryService.capture');
                 llmConfig = {
                   llmProvider: extraction?.provider ?? 'anthropic',
                   llmApiKey: extraction?.apiKey,

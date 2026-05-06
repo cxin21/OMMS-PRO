@@ -31,11 +31,14 @@ export class VectorStore implements IVectorStore {
   private initialized: boolean;
   private config: VectorStoreConfig;
 
+  private degraded: boolean = false; // true when running in memory-only fallback mode
+
   constructor(userConfig?: Partial<VectorStoreConfig>) {
     this.logger = createServiceLogger('VectorStore');
     this.db = null;
     this.table = null;
     this.initialized = false;
+    this.degraded = false;
     this.config = (userConfig ?? {}) as VectorStoreConfig;
   }
 
@@ -103,7 +106,8 @@ export class VectorStore implements IVectorStore {
   }
 
   private async initializeMemoryMode(): Promise<void> {
-    this.logger.warn('Using memory mode for VectorStore');
+    this.degraded = true;
+    this.logger.warn('VectorStore running in DEGRADED memory-only mode — data will be lost on restart', { mode: 'memory' });
     this.memoryStore = new Map();
     this.initialized = true;
   }
@@ -233,6 +237,12 @@ export class VectorStore implements IVectorStore {
     if (options.filters?.timeRange) {
       filters.push(`metadata.createdAt >= ${options.filters.timeRange.start}`);
       filters.push(`metadata.createdAt <= ${options.filters.timeRange.end}`);
+    }
+
+    // 默认仅搜索最新版本（与 SQLite 查询一致）
+    // 如果调用方显式传入 isLatestVersion: false，则不添加此过滤
+    if (options.filters?.isLatestVersion !== false) {
+      filters.push('metadata.isLatestVersion = true');
     }
 
     // Execute vector search

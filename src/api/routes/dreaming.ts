@@ -234,8 +234,6 @@ export function createDreamingRoutes(deps: DreamingRoutesDeps): Router {
   router.get('/config', async (req: Request, res: Response) => {
     if (!deps.dreamingManager) { notAvailable(res); return; }
     try {
-      const currentConfig = deps.dreamingManager.getConfig();
-
       res.json({
         success: true,
         data: {

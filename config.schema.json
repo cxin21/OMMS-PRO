@@ -1,0 +1,677 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://omms.pro/config.schema.json",
+  "title": "OMMS-PRO Configuration Schema",
+  "description": "Configuration schema for OMMS-PRO memory management system",
+  "type": "object",
+  "required": ["agentId", "api", "mcp", "logging", "memoryService", "embedding", "dreamingEngine", "llmExtraction"],
+  "properties": {
+    "agentId": { "type": "string", "default": "default-agent" },
+    "sessionPrefix": { "type": "string", "default": "session-" },
+    "projectDir": { "type": "string", "default": "./data/sessions" },
+    "agentsDir": { "type": "string", "default": "./agents" },
+
+    "llmExtraction": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "type": "string", "enum": ["openai", "anthropic", "ollama", "mock", "openai-compatible"] },
+        "model": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "baseURL": { "type": "string" },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxTokens": { "type": "integer", "minimum": 1 },
+        "timeout": { "type": "integer", "minimum": 1000 },
+        "maxRetries": { "type": "integer", "minimum": 0 },
+        "connectionPoolSize": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "api": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "host": { "type": "string" },
+        "basePath": { "type": "string" },
+        "server": {
+          "type": "object",
+          "properties": {
+            "timeout": { "type": "integer", "minimum": 1000 }
+          }
+        },
+        "cors": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "origin": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+            "enableRequestLogging": { "type": "boolean" },
+            "enableResponseLogging": { "type": "boolean" },
+            "enableFileLogging": { "type": "boolean" },
+            "logFilePath": { "type": "string" }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "apiKey": { "type": "string" }
+          }
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "enableAuth": { "type": "boolean" },
+            "apiKey": { "type": "string" },
+            "rateLimit": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "windowMs": { "type": "integer" },
+                "maxRequests": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "performance": {
+          "type": "object",
+          "properties": {
+            "enableCompression": { "type": "boolean" },
+            "maxRequestBodySize": { "type": "string" },
+            "webUIPath": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": "object",
+          "properties": {
+            "transport": { "type": "string", "enum": ["stdio", "sse", "websocket"] },
+            "port": { "type": ["integer", "null"] },
+            "host": { "type": ["string", "null"] },
+            "ssePort": { "type": "integer" },
+            "wsPort": { "type": "integer" }
+          }
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "enableLogging": { "type": "boolean" },
+            "timeout": { "type": "integer" },
+            "maxResults": { "type": "integer" },
+            "conversationLogDir": { "type": "string" }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": { "type": "string", "enum": ["debug", "info", "warn", "error"] }
+          }
+        },
+        "performance": {
+          "type": "object",
+          "properties": {
+            "enableCache": { "type": "boolean" },
+            "cacheTTL": { "type": "integer" },
+            "maxConcurrentTools": { "type": "integer" }
+          }
+        }
+      }
+    },
+
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "output": { "type": "string", "enum": ["console", "file", "both"] },
+        "filePath": { "type": "string" },
+        "maxSize": { "type": "integer" },
+        "maxFiles": { "type": "integer" },
+        "flushIntervalMs": { "type": "integer" },
+        "services": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "memoryService": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "agentId": { "type": "string" },
+        "store": { "$ref": "#/definitions/MemoryStoreConfig" },
+        "recall": { "$ref": "#/definitions/MemoryRecallConfig" },
+        "forget": { "$ref": "#/definitions/MemoryForgetConfig" },
+        "reinforcement": { "$ref": "#/definitions/ReinforcementConfig" },
+        "cache": { "$ref": "#/definitions/MemoryCacheConfig" },
+        "episode": { "$ref": "#/definitions/MemoryEpisodeConfig" },
+        "topic": { "$ref": "#/definitions/MemoryTopicConfig" },
+        "sentiment": { "$ref": "#/definitions/MemorySentimentConfig" },
+        "consolidation": { "$ref": "#/definitions/MemoryConsolidationConfig" },
+        "spatial": { "$ref": "#/definitions/MemorySpatialConfig" },
+        "logging": { "$ref": "#/definitions/MemoryLoggingConfig" },
+        "version": { "$ref": "#/definitions/MemoryVersionConfig" },
+        "degradation": { "$ref": "#/definitions/MemoryDegradationConfig" },
+        "scopeDegradation": { "$ref": "#/definitions/ScopeDegradationConfig" },
+        "capture": { "$ref": "#/definitions/MemoryCaptureConfig" },
+        "roomManager": { "$ref": "#/definitions/RoomManagerConfig" },
+        "memoryRoomMapping": { "$ref": "#/definitions/MemoryRoomMappingConfig" },
+        "accessControl": { "$ref": "#/definitions/AccessControlConfig" },
+        "indexUpdate": { "$ref": "#/definitions/IndexUpdateConfig" },
+        "recallStrategy": { "$ref": "#/definitions/RecallStrategyConfig" },
+        "webhook": { "$ref": "#/definitions/WebhookConfig" },
+        "storage": { "$ref": "#/definitions/MemoryStorageConfig" },
+        "profileService": { "$ref": "#/definitions/ProfileServiceConfig" },
+        "llmExtractor": { "$ref": "#/definitions/LLMExtractorPromptsConfig" },
+        "inclusion": { "$ref": "#/definitions/InclusionConfig" }
+      }
+    },
+
+    "embedding": {
+      "type": "object",
+      "required": ["model", "dimensions"],
+      "properties": {
+        "model": { "type": "string" },
+        "dimensions": { "type": "integer", "minimum": 1 },
+        "baseURL": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "batchSize": { "type": "integer", "minimum": 1 },
+        "timeout": { "type": "integer", "minimum": 1000 },
+        "maxRetries": { "type": "integer", "minimum": 0 },
+        "connectionPoolSize": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "streaming": {
+      "type": "object",
+      "properties": {
+        "maxEventsPerStream": { "type": "integer" },
+        "maxStreams": { "type": "integer" },
+        "maxSubscriptionsPerClient": { "type": "integer" },
+        "streamRetentionMs": { "type": "integer" }
+      }
+    },
+
+    "dreamingEngine": {
+      "type": "object",
+      "properties": {
+        "scheduler": { "$ref": "#/definitions/DreamingSchedulerConfig" },
+        "consolidation": { "$ref": "#/definitions/DreamingConsolidationConfig" },
+        "reorganization": { "$ref": "#/definitions/DreamingReorganizationConfig" },
+        "archival": { "$ref": "#/definitions/DreamingArchivalConfig" },
+        "defragmentation": { "$ref": "#/definitions/DreamingDefragmentationConfig" },
+        "themeExtraction": { "$ref": "#/definitions/DreamingThemeExtractionConfig" },
+        "activeLearning": { "$ref": "#/definitions/DreamingActiveLearningConfig" }
+      }
+    },
+
+    "multiAgent": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "agents": {
+          "type": "object",
+          "properties": {
+            "heartbeatTimeoutMs": { "type": "integer" },
+            "heartbeatIntervalMs": { "type": "integer" },
+            "maxMissedHeartbeats": { "type": "integer" },
+            "cleanupIntervalMs": { "type": "integer" }
+          }
+        }
+      }
+    }
+  },
+
+  "definitions": {
+    "MemoryStoreConfig": {
+      "type": "object",
+      "properties": {
+        "autoExtract": { "type": "boolean" },
+        "autoChunk": { "type": "boolean" },
+        "autoEnrich": { "type": "boolean" },
+        "chunkThreshold": { "type": "integer" },
+        "defaultType": { "type": "string" },
+        "summaryMaxLength": { "type": "integer" },
+        "defaultImportance": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "defaultScopeScore": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "defaultConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "scopeUpgradeThresholds": {
+          "type": "object",
+          "properties": {
+            "sessionToAgentImportance": { "type": "integer" },
+            "agentToGlobalScopeScore": { "type": "integer" },
+            "agentToGlobalImportance": { "type": "integer" }
+          }
+        },
+        "blockThresholds": {
+          "type": "object",
+          "properties": {
+            "coreMinImportance": { "type": "integer" },
+            "sessionMinImportance": { "type": "integer" },
+            "workingMinImportance": { "type": "integer" },
+            "archivedMinImportance": { "type": "integer" }
+          }
+        },
+        "scopeDegradationDecayRate": { "type": "number" }
+      }
+    },
+    "MemoryRecallConfig": {
+      "type": "object",
+      "properties": {
+        "defaultLimit": { "type": "integer" },
+        "maxLimit": { "type": "integer" },
+        "minScore": { "type": "number" },
+        "enableVectorSearch": { "type": "boolean" },
+        "enableKeywordSearch": { "type": "boolean" },
+        "vectorWeight": { "type": "number" },
+        "keywordWeight": { "type": "number" },
+        "includeVersionChain": { "type": "boolean" },
+        "bm25K1": { "type": "number" },
+        "bm25B": { "type": "number" }
+      }
+    },
+    "MemoryForgetConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "checkInterval": { "type": "integer" },
+        "archiveThreshold": { "type": "integer" },
+        "deleteThreshold": { "type": "integer" },
+        "maxInactiveDays": { "type": "integer" },
+        "protectLevel": { "type": "integer" }
+      }
+    },
+    "ReinforcementConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "lowBoostThreshold": { "type": "integer" },
+        "mediumBoostThreshold": { "type": "integer" },
+        "highBoostThreshold": { "type": "integer" },
+        "lowBoost": { "type": "number" },
+        "mediumBoost": { "type": "number" },
+        "highBoost": { "type": "number" },
+        "defaultBoost": { "type": "number" },
+        "maxImportance": { "type": "integer" },
+        "scopeBoost": { "type": "number" },
+        "cooldownMs": { "type": "integer" },
+        "accessWeight": { "type": "number" },
+        "recencyWeight": { "type": "number" }
+      }
+    },
+    "MemoryCacheConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxSize": { "type": "integer" },
+        "ttl": { "type": "integer" },
+        "evictionPolicy": { "type": "string", "enum": ["lru", "lfu"] }
+      }
+    },
+    "MemoryEpisodeConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "autoDetect": { "type": "boolean" },
+        "detectIntervalMinutes": { "type": "integer" },
+        "mergeThreshold": { "type": "number" },
+        "maxMemoriesPerEpisode": { "type": "integer" }
+      }
+    },
+    "MemoryTopicConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "directSwitchThreshold": { "type": "number" },
+        "noSwitchThreshold": { "type": "number" },
+        "useLLM": { "type": "boolean" }
+      }
+    },
+    "MemorySentimentConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "useModel": { "type": "boolean" },
+        "useLLMRefine": { "type": "boolean" },
+        "llmRefineThreshold": { "type": "number" }
+      }
+    },
+    "MemoryConsolidationConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "scheduleHour": { "type": "integer", "minimum": 0, "maximum": 23 },
+        "maxMemoriesPerCycle": { "type": "integer" },
+        "minRecallCount": { "type": "integer" },
+        "actions": {
+          "type": "object",
+          "properties": {
+            "compress": { "type": "boolean" },
+            "link": { "type": "boolean" },
+            "snapshot": { "type": "boolean" },
+            "merge": { "type": "boolean" }
+          }
+        },
+        "llmCompression": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "temperature": { "type": "number" },
+            "maxTokens": { "type": "integer" }
+          }
+        },
+        "merge": {
+          "type": "object",
+          "properties": {
+            "similarityThreshold": { "type": "number" },
+            "maxGroupSize": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "MemorySpatialConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dimensions": { "type": "integer", "enum": [2, 3] },
+        "maxNeighbors": { "type": "integer" },
+        "clusteringThreshold": { "type": "number" },
+        "autoLayout": { "type": "boolean" },
+        "layoutRefreshThreshold": { "type": "integer" },
+        "defaultRadius": { "type": "integer" },
+        "enableSpatialRecall": { "type": "boolean" }
+      }
+    },
+    "MemoryLoggingConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "level": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "directory": { "type": "string" }
+      }
+    },
+    "MemoryVersionConfig": {
+      "type": "object",
+      "properties": {
+        "similarityThreshold": { "type": "number" },
+        "maxVersions": { "type": "integer" },
+        "enableVersioning": { "type": "boolean" }
+      }
+    },
+    "MemoryDegradationConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "checkInterval": { "type": "integer" },
+        "decayRate": { "type": "number" },
+        "importanceWeight": { "type": "number" },
+        "scopeWeight": { "type": "number" },
+        "deleteThreshold": { "type": "integer" },
+        "archiveThreshold": { "type": "integer" },
+        "protectLevel": { "type": "integer" },
+        "archivedDecayMultiplier": { "type": "number" },
+        "maxDegradationWaitMs": { "type": "integer" },
+        "aaakProtection": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    },
+    "ScopeDegradationConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sessionToAgentDays": { "type": "integer" },
+        "agentToGlobalDays": { "type": "integer" },
+        "globalToAgentDays": { "type": "integer" },
+        "sessionUpgradeRecallThreshold": { "type": "integer" },
+        "agentUpgradeRecallThreshold": { "type": "integer" },
+        "upgradeScopeScoreMax": { "type": "integer" },
+        "agentToGlobalImportance": { "type": "integer" }
+      }
+    },
+    "MemoryCaptureConfig": {
+      "type": "object",
+      "properties": {
+        "maxMemoriesPerCapture": { "type": "integer" },
+        "similarityThreshold": { "type": "number" },
+        "confidenceThreshold": { "type": "number" },
+        "enableLLMSummarization": { "type": "boolean" },
+        "llmProvider": { "type": "string" },
+        "llmApiKey": { "type": "string" },
+        "llmEndpoint": { "type": "string" },
+        "llmModel": { "type": "string" },
+        "versionLockTTLMs": { "type": "integer" },
+        "maxVersionLocks": { "type": "integer" },
+        "versionLockWaitMs": { "type": "integer" },
+        "contentHashCacheSize": { "type": "integer" },
+        "enableIncrementalCapture": { "type": "boolean" },
+        "extractionTimeout": { "type": "integer" },
+        "conversationThreshold": { "type": "integer" },
+        "contextExtension": { "type": "integer" },
+        "inclusionSimilarityThreshold": { "type": "number" }
+      }
+    },
+    "RoomManagerConfig": {
+      "type": "object",
+      "properties": {
+        "mergeThreshold": { "type": "integer" },
+        "splitThreshold": { "type": "integer" },
+        "maxRecommendations": { "type": "integer" },
+        "similarityThreshold": { "type": "number" },
+        "autoManage": { "type": "boolean" }
+      }
+    },
+    "MemoryRoomMappingConfig": {
+      "type": "object",
+      "properties": {
+        "maxRoomsPerMemory": { "type": "integer" },
+        "maxMemoriesPerRoom": { "type": "integer" },
+        "autoCleanupOrphaned": { "type": "boolean" }
+      }
+    },
+    "AccessControlConfig": {
+      "type": "object",
+      "properties": {
+        "defaultAccessLevel": { "type": "string" },
+        "auditEnabled": { "type": "boolean" },
+        "policyCacheSize": { "type": "integer" },
+        "systemAgentId": { "type": "string" }
+      }
+    },
+    "IndexUpdateConfig": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["immediate", "batch", "scheduled"] },
+        "batchSize": { "type": "integer" },
+        "batchDelayMs": { "type": "integer" },
+        "maxPendingTasks": { "type": "integer" },
+        "highPriorityThreshold": { "type": "number" },
+        "scheduledIntervalMs": { "type": "integer" },
+        "maxRetries": { "type": "integer" }
+      }
+    },
+    "RecallStrategyConfig": {
+      "type": "object",
+      "properties": {
+        "timeDecayFactor": { "type": "number" },
+        "diversityWeight": { "type": "number" },
+        "contextWeight": { "type": "number" },
+        "feedbackWeight": { "type": "number" },
+        "maxResults": { "type": "integer" },
+        "minDiversityScore": { "type": "number" },
+        "feedbackDecayMs": { "type": "integer" }
+      }
+    },
+    "WebhookConfig": {
+      "type": "object",
+      "properties": {
+        "maxRetries": { "type": "integer" },
+        "retryIntervalMs": { "type": "integer" },
+        "timeoutMs": { "type": "integer" },
+        "maxConcurrentDeliveries": { "type": "integer" },
+        "deliveryQueueSize": { "type": "integer" }
+      }
+    },
+    "MemoryStorageConfig": {
+      "type": "object",
+      "properties": {
+        "metaStoreDbPath": { "type": "string" },
+        "palaceStorePath": { "type": "string" },
+        "graphStoreDbPath": { "type": "string" },
+        "vectorStoreDbPath": { "type": "string" },
+        "vectorStoreTableName": { "type": "string" },
+        "episodeStorePath": { "type": "string" },
+        "graphBasePath": { "type": "string" },
+        "profileDbPath": { "type": "string" },
+        "dreamReportsDbPath": { "type": "string" },
+        "interactionDbPath": { "type": "string" },
+        "graphProcessorIntervalMs": { "type": "integer" },
+        "tagDbPath": { "type": "string" },
+        "roomClusterDbPath": { "type": "string" },
+        "memoryRoomMappingDbPath": { "type": "string" }
+      }
+    },
+    "ProfileServiceConfig": {
+      "type": "object",
+      "properties": {
+        "maxTagsPerUser": { "type": "integer" },
+        "preferenceInferer": {
+          "type": "object",
+          "properties": {
+            "minInteractions": { "type": "integer" },
+            "confidenceThreshold": { "type": "number" },
+            "decayFactor": { "type": "number" }
+          }
+        },
+        "defaultScores": {
+          "type": "object",
+          "properties": {
+            "personaImportance": { "type": "integer" },
+            "personaScopeScore": { "type": "integer" },
+            "identityImportance": { "type": "integer" },
+            "identityScopeScore": { "type": "integer" },
+            "preferenceImportance": { "type": "integer" },
+            "preferenceScopeScore": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "LLMExtractorPromptsConfig": {
+      "type": "object",
+      "properties": {
+        "systemPrompt": { "type": "string" },
+        "extractionPrompt": { "type": "string" },
+        "summaryPrompt": { "type": "string" },
+        "scoringPrompt": { "type": "string" },
+        "mergingPrompt": { "type": "string" },
+        "consolidationPrompt": { "type": "string" },
+        "entityPrompt": { "type": "string" },
+        "focusPrompt": { "type": "string" },
+        "personaPrompt": { "type": "string" },
+        "inclusionPrompt": { "type": "string" },
+        "compressionPrompt": { "type": "string" }
+      }
+    },
+    "InclusionConfig": {
+      "type": "object",
+      "properties": {
+        "defaultScore": { "type": "number" },
+        "inclusionThreshold": { "type": "number" },
+        "identicalThreshold": { "type": "number" }
+      }
+    },
+    "DreamingSchedulerConfig": {
+      "type": "object",
+      "properties": {
+        "autoOrganize": { "type": "boolean" },
+        "organizeInterval": { "type": "integer" },
+        "memoryThreshold": { "type": "integer" },
+        "fragmentationThreshold": { "type": "number" },
+        "stalenessDays": { "type": "integer" },
+        "maxMemoriesPerCycle": { "type": "integer" },
+        "maxRelationsPerCycle": { "type": "integer" }
+      }
+    },
+    "DreamingConsolidationConfig": {
+      "type": "object",
+      "properties": {
+        "similarityThreshold": { "type": "number" },
+        "maxGroupSize": { "type": "integer" },
+        "maxTagsPerMemory": { "type": "integer" },
+        "preserveNewest": { "type": "boolean" },
+        "createNewVersion": { "type": "boolean" },
+        "topicSimilarityThreshold": { "type": "number" },
+        "semanticCheckThreshold": { "type": "number" },
+        "vectorSearchLimit": { "type": "integer" },
+        "candidateThreshold": { "type": "number" }
+      }
+    },
+    "DreamingReorganizationConfig": {
+      "type": "object",
+      "properties": {
+        "minEdgeWeight": { "type": "number" },
+        "densityTarget": { "type": "number" },
+        "orphanThreshold": { "type": "number" },
+        "maxNewRelationsPerCycle": { "type": "integer" },
+        "minNewRelationSimilarity": { "type": "number" }
+      }
+    },
+    "DreamingArchivalConfig": {
+      "type": "object",
+      "properties": {
+        "importanceThreshold": { "type": "integer" },
+        "stalenessDays": { "type": "integer" },
+        "archiveBlock": { "type": "string" },
+        "retentionDays": { "type": "integer" },
+        "archiveScoreThreshold": { "type": "integer" },
+        "archiveScoreWeights": {
+          "type": "object",
+          "properties": {
+            "importanceWeight": { "type": "integer" },
+            "stalenessWeight": { "type": "integer" },
+            "recallWeight": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "DreamingDefragmentationConfig": {
+      "type": "object",
+      "properties": {
+        "fragmentationThreshold": { "type": "number" },
+        "enableCompression": { "type": "boolean" }
+      }
+    },
+    "DreamingThemeExtractionConfig": {
+      "type": "object",
+      "properties": {
+        "minThemeStrength": { "type": "number" },
+        "maxThemes": { "type": "integer" },
+        "useLLMEnhancement": { "type": "boolean" }
+      }
+    },
+    "DreamingActiveLearningConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxPatterns": { "type": "integer" },
+        "maxWeakAreas": { "type": "integer" },
+        "patternConfidenceThreshold": { "type": "number" },
+        "weakAreaThresholds": {
+          "type": "object",
+          "properties": {
+            "minScopeMemoryCount": { "type": "integer" },
+            "lowImportanceRatioThreshold": { "type": "number" }
+          }
+        },
+        "highValueImportanceThreshold": { "type": "integer" },
+        "lowValueImportanceThreshold": { "type": "integer" }
+      }
+    }
+  }
+}

@@ -24,12 +24,6 @@
       "type": "boolean",
       "default": true,
       "description": "Enable Claude hooks for automatic memory operations"
-    },
-    {
-      "key": "enableSkills",
-      "type": "boolean",
-      "default": true,
-      "description": "Enable Claude skills"
     }
   ],
   "hooks": [
@@ -59,7 +53,7 @@
     },
     {
       "name": "memory_capture",
-      "description": "Capture the current conversation as a memory in OMMS-PRO"
+      "description": "Capture content as a memory in OMMS-PRO for cross-session persistence"
     },
     {
       "name": "memory_list",
@@ -68,14 +62,6 @@
     {
       "name": "profile_get",
       "description": "Get the user profile including L0 identity and L1 preferences"
-    },
-    {
-      "name": "omms_record_context",
-      "description": "Record user/assistant conversation to local JSONL file (MANDATORY after each response)"
-    },
-    {
-      "name": "omms_capture_session",
-      "description": "Capture full conversation memory at session end"
     }
   ]
 }

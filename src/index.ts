@@ -253,9 +253,9 @@ export class OMMS {
 
     // 7. 初始化 Agent 系统（用于 LLM 上下文注入）
     // 从配置读取 agentsDir，如果未配置则使用默认值 './agents'
-    const agentConfig = this.configManager.getConfig('agents') as { agentsDir?: string } | undefined;
+    const agentsDir = this.configManager.getConfig('agentsDir') as string | undefined;
     const agentContextProvider = new AgentContextProvider({
-      agentsDir: agentConfig?.agentsDir ?? './agents',
+      agentsDir: agentsDir ?? './agents',
       enabled: true,
       preload: true,
       logger: this.logger,
@@ -266,9 +266,8 @@ export class OMMS {
     // 8. 初始化 LLM Extractor（用于生成摘要和评分）
     try {
       const llmConfig = this.configManager.getConfig('memoryService.capture') as Partial<MemoryCaptureConfig> | undefined;
-      console.log('[OMMS] LLM Extractor init - llmConfig:', llmConfig, 'llmProvider:', llmConfig?.llmProvider);
+      this.logger.info('[OMMS] LLM Extractor init', { provider: llmConfig?.llmProvider, model: llmConfig?.llmModel });
       if (llmConfig && llmConfig.llmProvider) {
-        console.log('[OMMS] Creating LLM Extractor with provider:', llmConfig.llmProvider);
         const extractor = createLLMExtractor({
           maxMemoriesPerCapture: llmConfig.maxMemoriesPerCapture ?? config.getConfig<number>('memoryService.capture.maxMemoriesPerCapture') ?? MemoryDefaults.maxMemoriesPerCapture,
           similarityThreshold: llmConfig.similarityThreshold ?? config.getConfig<number>('memoryService.capture.similarityThreshold') ?? MemoryDefaults.similarityThreshold,
@@ -286,7 +285,9 @@ export class OMMS {
         this.memoryService.setLLMExtractor(extractor);
         this.dreamingManager.setLLMExtractor(extractor);
         this.profileManager.setLLMExtractor(extractor);
-        console.log('[OMMS] setLLMExtractor completed, checking storeManager.getLLMExtractor():', this.memoryService.getStoreManager().getLLMExtractor() ? 'defined' : 'UNDEFINED');
+        this.logger.debug('[OMMS] LLM Extractor wired to services', {
+          storeManager: this.memoryService.getStoreManager().getLLMExtractor() ? 'defined' : 'UNDEFINED',
+        });
         this.logger.info('[OMMS] LLM Extractor initialized', { provider: llmConfig.llmProvider });
       } else {
         this.logger.warn('[OMMS] No LLM provider configured, summary generation will use fallback truncation');
@@ -302,7 +303,7 @@ export class OMMS {
       const llmExtractor = storeManager.getLLMExtractor();
       const llmConfig = this.configManager.getConfig('memoryService.capture') as Partial<MemoryCaptureConfig> | undefined;
 
-      console.log('[OMMS] Creating MemoryCaptureService - llmExtractor:', llmExtractor ? 'available' : 'UNDEFINED');
+      this.logger.debug('[OMMS] Creating MemoryCaptureService', { llmExtractor: llmExtractor ? 'available' : 'UNDEFINED' });
 
       if (!llmExtractor) {
         this.logger.warn('[OMMS] Cannot create MemoryCaptureService - llmExtractor is undefined');
@@ -434,7 +435,7 @@ async function startServer(): Promise<void> {
 // 如果直接运行此文件，则启动服务器
 if (import.meta.url === `file://${process.argv[1]}`) {
   startServer().catch((error) => {
-    console.error('Failed to start OMMS-PRO server:', error);
+    process.stderr.write(`Fatal: Failed to start OMMS-PRO server: ${error instanceof Error ? error.message : error}\n`);
     process.exit(1);
   });
 }

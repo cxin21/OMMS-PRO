@@ -15,6 +15,7 @@ import { FileUtils } from '../../../shared/utils/file';
 import { dirname } from 'path';
 import Database from 'better-sqlite3';
 import { config } from '../../../shared/config';
+import { MathUtils } from '../../../shared/utils';
 
 export interface DynamicRoomManagerConfig {
   /** 合并阈值：记忆数低于此值则合并 */
@@ -150,7 +151,13 @@ export class DynamicRoomManager {
           id: row.clusterId,
           name: row.clusterId,
           createdAt: row.createdAt,
-          embeddings: row.centroidEmbedding ? Array.from(new Float32Array(row.centroidEmbedding.buffer)) : []
+          embeddings: row.centroidEmbedding
+            ? Array.from(new Float32Array(
+                row.centroidEmbedding.buffer,
+                row.centroidEmbedding.byteOffset,
+                row.centroidEmbedding.byteLength / Float32Array.BYTES_PER_ELEMENT
+              ))
+            : []
         };
         this.rooms.set(row.clusterId, room);
 
@@ -181,7 +188,8 @@ export class DynamicRoomManager {
         return;
       }
 
-      const centroidEmbedding = Buffer.from(new Float32Array(room.embeddings));
+      const floatArr = new Float32Array(room.embeddings);
+      const centroidEmbedding = Buffer.from(floatArr.buffer, floatArr.byteOffset, floatArr.byteLength);
       const memberUids = JSON.stringify(Array.from(members || []));
 
       const upsertStmt = this.db.prepare(`
@@ -223,7 +231,7 @@ export class DynamicRoomManager {
       const recommendations: RoomRecommendation[] = [];
 
       for (const [roomId, room] of this.rooms) {
-        const similarity = this.cosineSimilarity(contentEmbedding, room.embeddings);
+        const similarity = MathUtils.cosineSimilarity(contentEmbedding, room.embeddings);
 
         if (similarity >= this.config.similarityThreshold) {
           recommendations.push({
@@ -290,9 +298,13 @@ export class DynamicRoomManager {
       const mergedRoomId = roomIds[0];
       this.roomMembers.set(mergedRoomId, new Set(allMembers));
 
-      // Update merged room's timestamp
+      // Recalculate centroid as average of all merged rooms' centroids
       const mergedRoom = this.rooms.get(mergedRoomId);
       if (mergedRoom) {
+        const mergedCentroid = this.calculateAverageCentroid(roomIds);
+        if (mergedCentroid.length > 0) {
+          mergedRoom.embeddings = mergedCentroid;
+        }
         mergedRoom.createdAt = Date.now();
       }
 
@@ -458,15 +470,49 @@ export class DynamicRoomManager {
   }
 
   /**
-   * 将记忆添加到 Room
+   * 将记忆添加到 Room，可选择传入新成员的 embedding 以重新计算 centroid
    */
-  async addMemberToRoom(roomId: string, memoryId: string): Promise<void> {
+  async addMemberToRoom(roomId: string, memoryId: string, memberEmbedding?: number[]): Promise<void> {
     await this.ensureInitialized();
     if (!this.roomMembers.has(roomId)) {
       this.roomMembers.set(roomId, new Set());
     }
     this.roomMembers.get(roomId)!.add(memoryId);
+    if (memberEmbedding) {
+      this.recalculateCentroid(roomId, memberEmbedding);
+    }
     this.syncClusterToDb(roomId);
+  }
+
+  /**
+   * 重新计算 Room 的 centroid embedding（增量更新）
+   * 使用加权平均：新 centroid = (n * oldCentroid + newEmbedding) / (n + 1)
+   */
+  private recalculateCentroid(roomId: string, newEmbedding: number[]): void {
+    const room = this.rooms.get(roomId);
+    if (!room || room.embeddings.length === 0) {
+      return;
+    }
+    const memberCount = this.roomMembers.get(roomId)?.size ?? 1;
+    if (memberCount <= 1) {
+      room.embeddings = [...newEmbedding];
+      return;
+    }
+    const n = memberCount - 1; // previous member count
+    for (let i = 0; i < room.embeddings.length && i < newEmbedding.length; i++) {
+      room.embeddings[i] = (n * room.embeddings[i] + newEmbedding[i]) / (n + 1);
+    }
+  }
+
+  /**
+   * 从 DynamicRoomManager 中永久删除 Room
+   */
+  async deleteRoom(roomId: string): Promise<void> {
+    await this.ensureInitialized();
+    this.roomMembers.delete(roomId);
+    this.rooms.delete(roomId);
+    this.syncClusterToDb(roomId); // triggers DELETE when room is null
+    this.logger.debug('Room deleted', { roomId });
   }
 
   /**
@@ -507,24 +553,22 @@ export class DynamicRoomManager {
   }
 
   /**
-   * 计算余弦相似度
+   * 计算多个 Room centroid 的平均值
    */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length || a.length === 0) {
-      return 0;
+  private calculateAverageCentroid(roomIds: string[]): number[] {
+    const rooms = roomIds.map(id => this.rooms.get(id)).filter(Boolean) as Room[];
+    if (rooms.length === 0) return [];
+    const dim = rooms[0].embeddings.length;
+    const result = new Array(dim).fill(0);
+    for (const room of rooms) {
+      for (let i = 0; i < dim && i < room.embeddings.length; i++) {
+        result[i] += room.embeddings[i];
+      }
     }
-
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+    for (let i = 0; i < dim; i++) {
+      result[i] /= rooms.length;
     }
-
-    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-    return denominator > 0 ? dot / denominator : 0;
+    return result;
   }
+
 }

@@ -229,7 +229,7 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
     return merged;
   }
 
-  async consolidateMemories(memories: string[]): Promise<{
+  async consolidateMemories(memories: string[], query?: string): Promise<{
     content: string;
     keywords: string[];
     insights: string[];
@@ -247,9 +247,10 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
       };
     }
 
-    const prompt = this.buildConsolidationPrompt(memories);
-    this.logger.debug('consolidateMemories called', { memoryCount: memories.length });
+    const prompt = this.buildConsolidationPrompt(memories, query);
+    this.logger.debug('consolidateMemories called', { memoryCount: memories.length, hasQuery: !!query });
     const response = await this.callWithAgentContext(prompt, AgentType.DREAMING);
+    this.logger.debug('consolidateMemories LLM response', { responsePreview: response.substring(0, 500) });
     const result = this.parseConsolidationResponse(response);
 
     this.logger.info('consolidateMemories completed', {
@@ -320,9 +321,10 @@ export abstract class BaseLLMExtractor implements ILLMExtractor {
     return this.renderPrompt(this.promptFiles.mergingPrompt, { memoryList });
   }
 
-  protected buildConsolidationPrompt(memories: string[]): string {
+  protected buildConsolidationPrompt(memories: string[], query?: string): string {
     const memoryList = memories.map((m, i) => `【记忆 ${i + 1}】\n${m}`).join('\n\n');
-    return this.renderPrompt(this.promptFiles.consolidationPrompt, { memoryList });
+    const queryBlock = query ? `\n\n【用户当前问题】\n${query}\n\n请根据用户当前问题，从记忆中选择最相关的部分进行整理。` : '';
+    return this.renderPrompt(this.promptFiles.consolidationPrompt, { memoryList, queryBlock });
   }
 
   protected buildEntityExtractionPrompt(content: string): string {

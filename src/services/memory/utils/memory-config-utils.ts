@@ -126,11 +126,30 @@ export function getScopeDegradationConfig(): {
  * 必须从 memoryService.recall 读取
  * 如果配置未初始化，抛出错误
  */
-export function getRecallConfig(): Pick<MemoryRecallConfig, 'defaultLimit' | 'maxLimit' | 'enableVectorSearch' | 'enableKeywordSearch' | 'vectorWeight' | 'keywordWeight'> {
+export function getRecallConfig(): {
+  defaultLimit: number;
+  maxLimit: number;
+  enableVectorSearch: boolean;
+  enableKeywordSearch: boolean;
+  vectorWeight: number;
+  keywordWeight: number;
+  minScore: number;
+  minMemories: number;
+  maxMemories: number;
+  minImportanceRatio: number;
+  bm25K1: number;
+  bm25B: number;
+} {
   if (!config.isInitialized()) {
     throw new Error('ConfigManager not initialized. Cannot read memoryService.recall.');
   }
-  const recallConfig = config.getConfigOrThrow<MemoryRecallConfig>('memoryService.recall');
+  const recallConfig = config.getConfigOrThrow<MemoryRecallConfig & {
+    minMemories?: number;
+    maxMemories?: number;
+    minImportanceRatio?: number;
+    bm25K1?: number;
+    bm25B?: number;
+  }>('memoryService.recall');
   return {
     defaultLimit: recallConfig.defaultLimit,
     maxLimit: recallConfig.maxLimit,
@@ -138,6 +157,27 @@ export function getRecallConfig(): Pick<MemoryRecallConfig, 'defaultLimit' | 'ma
     enableKeywordSearch: recallConfig.enableKeywordSearch,
     vectorWeight: recallConfig.vectorWeight,
     keywordWeight: recallConfig.keywordWeight,
+    minScore: recallConfig.minScore,
+    minMemories: recallConfig.minMemories ?? 3,
+    maxMemories: recallConfig.maxMemories ?? 20,
+    minImportanceRatio: recallConfig.minImportanceRatio ?? 0.6,
+    bm25K1: recallConfig.bm25K1 ?? 1.5,
+    bm25B: recallConfig.bm25B ?? 0.75,
+  };
+}
+
+/**
+ * 获取 AAAK 预筛选配置
+ * 必须从 memoryService.aaak 读取
+ */
+export function getAAAKConfig(): { enabled: boolean; minScore: number } {
+  if (!config.isInitialized()) {
+    throw new Error('ConfigManager not initialized. Cannot read memoryService.aaak.');
+  }
+  const aaakConfig = config.getConfig<{ enabled?: boolean; minScore?: number }>('memoryService.aaak');
+  return {
+    enabled: aaakConfig?.enabled ?? true,
+    minScore: aaakConfig?.minScore ?? 0,
   };
 }
 

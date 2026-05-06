@@ -1397,22 +1397,19 @@ export class MemoryDegradationManager {
         ...versionRefsToMigrate.map(r => ({ oldRef: r.oldRef, newRef: r.newRef })),
       ];
 
-      // 3. 构建归档后的 versionChain
-      //    注意：只有在 prepare 阶段成功复制文件的版本才更新到 archive 路径
-      //    这确保 versionChain 与实际文件的一致性
-      //    构建在事务提交后进行，使用 allMigratedRefs 中成功迁移的引用
-      //    格式: { oldRef: 原始路径, newRef: 归档路径 }
-      const archivedVersionChain: VersionInfo[] = memory.versionChain.map((v, idx) => {
-        const ref = versionRefsToMigrate[idx];
-        // 检查该版本是否被成功迁移（通过检查 oldRef 是否在 allMigratedRefs 中）
-        const wasMigrated = allMigratedRefs.some(m => m.oldRef === ref.oldRef);
-        // 只有成功迁移的版本才更新 palaceRef，否则保持原始路径
-        return {
-          ...v,
-          palaceRef: wasMigrated ? ref.newRef : v.palaceRef,
-          _archived: wasMigrated, // 内部标记，用于日志追踪
-        };
-      });
+      // 3. 构建归档后的 versionChain（延迟计算函数）
+      //    注意：allMigratedRefs 在 prepare 阶段才被填充，因此必须延迟到 commit 回调中计算
+      //    这确保 versionChain 与实际文件迁移状态一致
+      const buildArchivedVersionChain = (): VersionInfo[] =>
+        memory.versionChain.map((v, idx) => {
+          const ref = versionRefsToMigrate[idx];
+          const wasMigrated = allMigratedRefs.some(m => m.oldRef === ref.oldRef);
+          return {
+            ...v,
+            palaceRef: wasMigrated ? ref.newRef : v.palaceRef,
+            _archived: wasMigrated,
+          };
+        });
 
       // 4. 在事务中注册版本文件的迁移操作（两阶段提交）
       for (const ref of versionRefsToMigrate) {
@@ -1500,7 +1497,7 @@ export class MemoryDegradationManager {
             tags: newTags,
             palace: archivedPalaceLocation,
             currentPalaceRef: archivePalaceRef,
-            versionChain: archivedVersionChain,
+            versionChain: buildArchivedVersionChain(),
             updatedAt: now,
           });
         },

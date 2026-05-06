@@ -878,11 +878,13 @@ export class SQLiteMetaStore implements ISQLiteMetaStore {
       params.push(options.versionGroupId);
     }
 
-    // tags (JSON array contains)
+    // tags (JSON array contains — 使用 SQLite JSON 函数精确匹配，避免子串误匹配)
     if (options.tags && options.tags.length > 0) {
       for (const tag of options.tags) {
-        conditions.push("tags LIKE ?");
-        params.push(`%"${tag}"%`);
+        // 使用 json_each 遍历 JSON 数组进行精确匹配
+        // 例如: EXISTS(SELECT 1 FROM json_each(tags) WHERE value = ?)
+        conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)");
+        params.push(tag);
       }
     }
 

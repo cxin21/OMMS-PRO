@@ -69,13 +69,13 @@ export class ConfigValidator {
       required: true,
     });
 
-    // 捕获置信度阈值验证（原 scoring.importance.confidenceWeight，已迁移至 capture.confidenceThreshold）
-    this.registerRule('capture.confidenceThreshold', {
+    // 捕获置信度阈值验证（原 scoring.importance.confidenceWeight，已迁移至 memoryService.capture.confidenceThreshold）
+    this.registerRule('memoryService.capture.confidenceThreshold', {
       name: 'ScoreRange',
       validate: (value) => {
         return typeof value === 'number' && value >= 0 && value <= 1;
       },
-      message: 'capture.confidenceThreshold must be between 0 and 1',
+      message: 'memoryService.capture.confidenceThreshold must be between 0 and 1',
       required: true,
     });
   }

@@ -69,15 +69,28 @@ export class AgentContextProvider implements IAgentContextProvider {
       return this.createEmptyContext(agentType);
     }
 
+    // Check cache for non-runtime contexts
+    if (!runtimeContext || Object.keys(runtimeContext).length === 0) {
+      const cached = this.cache.get(agentType);
+      if (cached) return cached.context;
+    }
+
     // 构建系统提示词
     const systemPrompt = buildSystemPrompt(definition, runtimeContext);
 
-    return {
+    const context: AgentContext = {
       type: agentType,
       systemPrompt,
       definition,
       runtimeContext: runtimeContext || {},
     };
+
+    // Cache non-runtime contexts for reuse
+    if (!runtimeContext || Object.keys(runtimeContext).length === 0) {
+      this.cache.set(agentType, { context, cachedAt: Date.now() });
+    }
+
+    return context;
   }
 
   /**

@@ -7,6 +7,7 @@
  */
 
 import { createServiceLogger, type ILogger } from '../../../shared/logging';
+import { MathUtils } from '../../../shared/utils';
 import { TransactionCoordinator } from '../../memory/utils/transaction-manager';
 import type {
   IGraphStore,
@@ -78,6 +79,7 @@ export class GraphReorganizer {
     const gaps: GraphGap[] = [];
 
     try {
+      // Operational limit: scan up to 200 latest-version memories per gap analysis cycle
       const memories = await this.metaStore.query({ isLatestVersion: true, limit: 200 });
       const nonProfileMemories = memories.filter(m => !isProfileType(m.type));
 
@@ -447,26 +449,6 @@ export class GraphReorganizer {
       });
       return 0;
     }
-  }
-
-  /**
-   * 计算两个向量的余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) return 0;
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
   /**

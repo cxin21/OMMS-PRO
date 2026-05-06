@@ -23,7 +23,6 @@ export function createProfileRoutes(deps: ProfileRoutesDeps): Router {
       const userId = 'default-user';
 
       // Fetch real profile data
-      const profile = await deps.profileManager.getProfile(userId);
       const persona = await deps.profileManager.getPersona(userId);
       const preferences = await deps.profileManager.getPreferences(userId);
       const stats = await deps.profileManager.getUserStats(userId);

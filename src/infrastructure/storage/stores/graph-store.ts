@@ -279,7 +279,7 @@ export class GraphStore implements IGraphStore {
       //   a. Use SQLite JSON_TABLE function to extract array elements and build a separate index
       //   b. Decompose memoryIds into a separate memory_node_links junction table
       const escapedMemoryId = this.escapeLikeValue(memoryId);
-      const nodesStmt = this.db.prepare("SELECT id, memoryIds FROM graph_nodes WHERE memoryIds LIKE ?");
+      const nodesStmt = this.db.prepare("SELECT id, memoryIds FROM graph_nodes WHERE memoryIds LIKE ? ESCAPE '\\'");
       const nodes = nodesStmt.all(`%${escapedMemoryId}%`);
 
       for (const node of nodes) {
@@ -392,7 +392,7 @@ export class GraphStore implements IGraphStore {
       // 注意：需要转义 memoryId 中的 LIKE 特殊字符
       const placeholders = memoryIds.map(() => `memoryIds LIKE ?`).join(' OR ');
       const params = memoryIds.map(id => `%${this.escapeLikeValue(id)}%`);
-      const nodesStmt = this.db.prepare(`SELECT id, entity, memoryIds FROM graph_nodes WHERE ${placeholders}`);
+      const nodesStmt = this.db.prepare(`SELECT id, entity, memoryIds FROM graph_nodes WHERE ${placeholders} ESCAPE '\\'`);
       const nodes = nodesStmt.all(...params) as any[];
 
       // 按 memoryId 分组结果

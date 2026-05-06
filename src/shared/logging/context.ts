@@ -111,8 +111,8 @@ const loggerRegistry: Map<string, ILogger> = new Map();
  */
 const DEFAULT_CONFIG: LoggingConfig = {
   level: 'info',
-  output: 'file',
-  enableConsole: false,
+  output: 'both',
+  enableConsole: true,
   enableFile: true,
   enableRotation: true,
   format: 'text',

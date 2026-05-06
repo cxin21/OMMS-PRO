@@ -112,7 +112,9 @@ export class StorageMemoryService {
       stores.palaceStore,
       stores.graphStore,
       stores.cache,
-      embedder
+      embedder,
+      undefined, // userConfig
+      llmExtractor
     );
 
     // Initialize degradation manager
@@ -172,8 +174,19 @@ export class StorageMemoryService {
         maxRetries: indexUpdateConfig.maxRetries ?? 3,
         baseRetryDelayMs: indexUpdateConfig.baseRetryDelayMs ?? 1000,
         maxRetryDelayMs: indexUpdateConfig.maxRetryDelayMs ?? 60000,
-      });
-      this.logger.info('IndexUpdateStrategy initialized');
+      },
+        // Wire to actual store instances via adapter wrappers
+        {
+          storeBatch: async (docs) => { for (const d of docs) { await this._vectorStore.store(d as any); } },
+          delete: async (ids) => { for (const id of ids) { await this._vectorStore.delete(id); } },
+          rebuildIndex: async () => { /* LanceDB auto-indexes; no-op rebuild */ },
+        },
+        {
+          insertBatch: async (records) => { await this._metaStore.insertBatch(records as any); },
+          delete: async (uids) => { for (const uid of uids) { await this._metaStore.delete(uid); } },
+        }
+      );
+      this.logger.info('IndexUpdateStrategy initialized with actual store bindings');
     }
 
     // Initialize RecallStrategy if enabled
@@ -207,7 +220,8 @@ export class StorageMemoryService {
    */
   setLLMExtractor(extractor: ILLMExtractor): void {
     this.storeManager.setLLMExtractor(extractor);
-    this.logger.info('LLM Extractor configManagerured for StorageMemoryService');
+    this.recallManager.setLLMExtractor(extractor);
+    this.logger.info('LLM Extractor configured for StorageMemoryService');
   }
 
   // Getters for stores (used by listMemories)
@@ -307,13 +321,17 @@ export class StorageMemoryService {
 
     // 获取默认 agentId（优先从 options 获取，否则从 ConfigManager）
     // 注意：不允许在 ConfigManager 未初始化时使用硬编码默认值
-    let defaultAgentId: string;
-    let defaultSessionId = 'default-session';
-    if (config.isInitialized()) {
-      defaultAgentId = config.getConfig('memoryService.agentId') as string;
-    } else {
+    if (!config.isInitialized()) {
       throw new Error('StorageMemoryService: ConfigManager not initialized. Cannot determine default agentId.');
     }
+    const defaultAgentId = config.getConfig('memoryService.agentId') as string;
+    // P0 FIX: 验证 defaultAgentId 不为 undefined
+    if (!defaultAgentId) {
+      throw new Error('StorageMemoryService: memoryService.agentId is not configured');
+    }
+    // P0 FIX: defaultSessionId 也应该从配置读取，不使用硬编码
+    const sessionConfig = config.getConfig('memoryService.session') as { defaultSessionId?: string } | undefined;
+    const defaultSessionId = sessionConfig?.defaultSessionId || `session-${defaultAgentId}-${Date.now()}`;
 
     const result = await this.recallManager.recall({
       query: options.query,
@@ -487,14 +505,6 @@ export class StorageMemoryService {
     });
 
     return { memories, total };
-  }
-
-  /**
-   * 根据 importance 派生 MemoryBlock
-   * 使用配置管理模块的 blockThresholds
-   */
-  private deriveBlock(importance: number): MemoryBlock {
-    return deriveBlock(importance);
   }
 
   /**

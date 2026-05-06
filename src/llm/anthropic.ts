@@ -10,7 +10,7 @@ import type { ExtractedMemory, ScoringResult, PromptFileMapping } from './types'
  * Anthropic LLM Extractor 实现
  */
 export class AnthropicExtractor extends BaseLLMExtractor {
-  private readonly API_VERSION = '2023-06-01';
+  private readonly API_VERSION = '2023-06-01'; // Anthropic API version; pinned to stable release
 
   private get baseURL(): string {
     return this.llmConfig.llmEndpoint || 'https://api.anthropic.com/v1';
@@ -120,6 +120,10 @@ export class AnthropicExtractor extends BaseLLMExtractor {
 
     if (system) {
       body['system'] = system;
+    }
+
+    if (this.llmConfig.temperature !== undefined) {
+      body['temperature'] = this.llmConfig.temperature;
     }
 
     const response = await fetch(url, {

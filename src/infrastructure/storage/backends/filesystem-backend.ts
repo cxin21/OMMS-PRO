@@ -8,6 +8,7 @@
 import { promises as fs } from 'fs';
 import type { Stats } from 'fs';
 import { join, dirname } from 'path';
+import { brotliCompressSync, brotliDecompressSync } from 'zlib';
 import type {
   IStorageBackend,
   QueryCondition,
@@ -18,6 +19,9 @@ import type {
 } from '../core/interfaces';
 import { createLogger } from '../../../shared/logging';
 
+/** Prefix prepended to compressed file content for detection on read */
+const COMPRESSED_PREFIX = 'COMPRESSED:';
+
 /**
  * Configuration for FileSystemBackend
  */
@@ -26,17 +30,9 @@ export interface FileSystemBackendConfig {
   rootPath: string;
   /** File extension for stored files */
   fileExtension: string;
-  /**
-   * Enable compression for stored files
-   * TODO: Compression is configured but not yet implemented.
-   * When ready, use node:zlib (brotliCompress/gzip) in set()/get() methods.
-   */
+  /** Enable brotli compression for stored files (COMPRESSED: prefix + base64 encoded) */
   enableCompression: boolean;
-  /**
-   * Maximum file size in bytes
-   * TODO: File size limit is configured but not yet enforced.
-   * When ready, check serialized size in set() before writing.
-   */
+  /** Maximum file size in bytes (enforced in set() before writing) */
   maxFileSize: number;
 }
 
@@ -127,7 +123,17 @@ export class FileSystemBackend implements IStorageBackend {
 
     try {
       const filePath = this.getFilePath(key);
-      const content = await fs.readFile(filePath, 'utf-8');
+      const raw = await fs.readFile(filePath, 'utf-8');
+
+      // Handle compressed content (backward compatible with uncompressed files)
+      let content: string;
+      if (raw.startsWith(COMPRESSED_PREFIX)) {
+        const b64 = raw.slice(COMPRESSED_PREFIX.length);
+        content = brotliDecompressSync(Buffer.from(b64, 'base64')).toString('utf-8');
+      } else {
+        content = raw;
+      }
+
       return JSON.parse(content) as T;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -153,16 +159,22 @@ export class FileSystemBackend implements IStorageBackend {
 
       const serializedValue = JSON.stringify(value, null, 2);
 
-      // TODO: Enforce maxFileSize check before writing
-      // if (Buffer.byteLength(serializedValue, 'utf-8') > this.config.maxFileSize) {
-      //   throw new Error(`File size exceeds limit of ${this.config.maxFileSize} bytes`);
-      // }
+      // Enforce maxFileSize check
+      const rawSize = Buffer.byteLength(serializedValue, 'utf-8');
+      if (rawSize > this.config.maxFileSize) {
+        throw new Error(`File size (${rawSize} bytes) exceeds limit of ${this.config.maxFileSize} bytes`);
+      }
 
-      // TODO: If enableCompression is true, compress data before writing
-      // (e.g., using node:zlib brotliCompressSync)
+      let content: string;
+      if (this.config.enableCompression) {
+        const compressed = brotliCompressSync(Buffer.from(serializedValue, 'utf-8'));
+        content = COMPRESSED_PREFIX + compressed.toString('base64');
+      } else {
+        content = serializedValue;
+      }
 
-      await fs.writeFile(filePath, serializedValue, 'utf-8');
-      this.logger.debug('Value set', { key });
+      await fs.writeFile(filePath, content, 'utf-8');
+      this.logger.debug('Value set', { key, compressed: this.config.enableCompression });
     } catch (error) {
       this.logger.error('Failed to set value', error as Error, { key });
       throw error;

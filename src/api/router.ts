@@ -5,7 +5,7 @@
  */
 
 import { Application, Router } from 'express';
-import { createLogger, type ILogger } from '../shared/logging';
+import type { ILogger } from '../shared/logging';
 import { createErrorMiddleware } from './middleware/error-handler';
 import type { MemoryService, MemoryCaptureService } from '../services/memory';
 import type { DreamingManager } from '../services/dreaming/dreaming-manager';

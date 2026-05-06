@@ -62,7 +62,8 @@ export class CacheManager implements ICacheManager {
   }
 
   /**
-   * Get a memory from cache by UID
+   * Get a memory from cache by UID.
+   * Uses Map re-insertion for O(1) LRU: delete+re-set to move entry to "most recently used" end.
    */
   async get(uid: string): Promise<any | null> {
     const entry = this.cache.get(uid);
@@ -81,9 +82,11 @@ export class CacheManager implements ICacheManager {
       return null;
     }
 
-    // Update access metadata (LRU)
+    // Update access metadata and move to MRU end (delete+re-set for Map insertion-order LRU)
     entry.accessTime = Date.now();
     entry.accessCount++;
+    this.cache.delete(uid);
+    this.cache.set(uid, entry);
 
     this.stats.hits++;
     this.logger.debug('Cache hit', { uid, accessCount: entry.accessCount });
@@ -172,23 +175,15 @@ export class CacheManager implements ICacheManager {
   }
 
   /**
-   * Evict least recently used entry
+   * Evict least recently used entry in O(1) using Map insertion order.
+   * Map preserves insertion order; the first key is the least recently used.
    */
   private evictLRU(): void {
-    let oldestId: string | null = null;
-    let oldestTime = Date.now();
-
-    for (const [id, entry] of this.cache.entries()) {
-      if (entry.accessTime < oldestTime) {
-        oldestTime = entry.accessTime;
-        oldestId = id;
-      }
-    }
-
-    if (oldestId) {
-      this.cache.delete(oldestId);
+    const oldestKey = this.cache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      this.cache.delete(oldestKey);
       this.stats.evictions++;
-      this.logger.debug('LRU eviction', { uid: oldestId });
+      this.logger.debug('LRU eviction', { uid: oldestKey });
     }
   }
 

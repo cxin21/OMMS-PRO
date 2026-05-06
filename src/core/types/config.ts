@@ -5,9 +5,9 @@
  * @module types/config
  */
 
-import type { MemoryType, MemoryScope, MemoryBlock } from '@core/types/memory/index';
+import type { MemoryType, MemoryScope, MemoryBlock } from '../../types/memory';
 
-export type { MemoryBlock } from '@core/types/memory/index';
+export type { MemoryBlock } from '../../types/memory';
 
 export type HallType = 'facts' | 'events' | 'decisions' | 'errors' | 'learnings' | 'relations';
 
@@ -741,7 +741,6 @@ export interface OMMSConfig {
   memoryService: MemoryServiceConfig;
   embedding: EmbeddingConfig;
   dreamingEngine: DreamingEngineConfig;
-  capture: CaptureConfig;
   llmExtraction: LLMConfig;
   streaming?: StreamingConfig;
   multiAgent?: MultiAgentConfig;

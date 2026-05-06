@@ -21,6 +21,7 @@ import type {
 } from '../types';
 import { MemoryBlock, MemoryType, isProfileType } from '../../../types/memory';
 import { config } from '../../../shared/config';
+import { MemoryDefaults } from '../../../config';
 
 /**
  * 内部使用的归档配置类型，包含权重配置
@@ -131,7 +132,7 @@ export class StorageOptimizer {
     this.logger.debug('开始查找可归档记忆');
 
     const candidates: string[] = [];
-    const maxResults = limit ?? 100;
+    const maxResults = limit ?? MemoryDefaults.maxMemoriesPerCycle;
 
     try {
       // 查找低重要性的记忆
@@ -586,7 +587,7 @@ export class StorageOptimizer {
    */
   private async countOrphanedMemories(): Promise<number> {
     try {
-      const memories = await this.metaStore.query({ limit: 1000 });
+      const memories = await this.metaStore.query({ limit: MemoryDefaults.dreamingMaxItemsPerPhase });
       // Profile 类型不计入孤儿
       const nonProfileMemories = memories.filter(m => !isProfileType(m.type));
 
@@ -628,7 +629,7 @@ export class StorageOptimizer {
           start: 0,
           end: staleThreshold,
         },
-        limit: 1000,
+        limit: MemoryDefaults.dreamingMaxItemsPerPhase,
       });
 
       // 只统计重要性低的
@@ -678,7 +679,8 @@ export class StorageOptimizer {
       archiveScore += stalenessFactor * this.archivalConfig.stalenessWeight;
     } else {
       // 从未访问过的记忆，给予中等分数
-      archiveScore += this.archivalConfig.stalenessWeight * 0.43; // 约等于原来的 15
+      // Never-accessed memories get a moderate staleness contribution (≈ 15/35 of stalenessWeight)
+      archiveScore += this.archivalConfig.stalenessWeight * 0.43;
     }
 
     // 因素3: 召回频率评分 - recallCount 越低得分越高

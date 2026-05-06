@@ -141,8 +141,8 @@ export interface ILLMExtractor {
   /** 合并多个记忆 */
   mergeMemories(memories: string[]): Promise<string>;
 
-  /** 整理多个记忆 */
-  consolidateMemories(memories: string[]): Promise<{
+  /** 整理多个记忆（同步，等待完成） */
+  consolidateMemories(memories: string[], query?: string): Promise<{
     content: string;
     keywords: string[];
     insights: string[];

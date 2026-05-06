@@ -102,6 +102,7 @@ export interface VectorSearchOptions {
     tags?: string[];
     timeRange?: { start: number; end: number };
     uids?: string[];           // 指定 UID 列表
+    isLatestVersion?: boolean; // 仅搜索最新版本（默认 true），与 SQLite 查询一致
   };
 }
 

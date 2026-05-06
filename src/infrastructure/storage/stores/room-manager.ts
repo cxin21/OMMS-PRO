@@ -136,7 +136,7 @@ export class RoomManager {
   private loadConfig(): RoomManagerConfigFromFile {
     try {
       if (config.isInitialized()) {
-        const roomManagerConfig = config.getConfig<RoomManagerConfigFromFile>('roomManager');
+        const roomManagerConfig = config.getConfig<RoomManagerConfigFromFile>('memoryService.roomManager');
         return roomManagerConfig || {};
       }
     } catch {
@@ -288,14 +288,9 @@ export class RoomManager {
     // Remove all memory associations
     await this.memoryRoomMapping.removeRoom(roomId);
 
-    // Remove from DynamicRoomManager (by getting all rooms and filtering)
-    const rooms = await this.dynamicRoomManager.getAllRooms();
-    const roomToDelete = rooms.find(r => r.id === roomId);
-    if (roomToDelete) {
-      // Note: DynamicRoomManager doesn't have a direct deleteRoom method
-      // The room will be cleaned up when merge/split operations happen
-      this.logger.info('Room deleted (memory mappings removed)', { roomId });
-    }
+    // Remove from DynamicRoomManager
+    await this.dynamicRoomManager.deleteRoom(roomId);
+    this.logger.info('Room fully deleted', { roomId });
   }
 
   /**

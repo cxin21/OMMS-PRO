@@ -9,6 +9,7 @@
 
 import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
+import { MathUtils } from '../../../shared/utils';
 import type { MemoryTopicConfig } from '../../../core/types/config';
 
 export interface TopicDetectorConfig {
@@ -101,14 +102,14 @@ export class TopicDetector {
     try {
       if (history.lastTopicVector) {
         const currentVector = await embedder(currentMessage);
-        similarity = this.cosineSimilarity(history.lastTopicVector, currentVector);
+        similarity = MathUtils.cosineSimilarity(history.lastTopicVector, currentVector);
       } else {
         // 如果没有缓存的向量，重新计算
         const [lastVec, currentVec] = await Promise.all([
           embedder(history.lastTopic),
           embedder(currentMessage),
         ]);
-        similarity = this.cosineSimilarity(lastVec, currentVec);
+        similarity = MathUtils.cosineSimilarity(lastVec, currentVec);
         history.lastTopicVector = lastVec;
       }
     } catch (error) {
@@ -298,28 +299,6 @@ export class TopicDetector {
    */
   clearTopic(sessionId: string): void {
     this.topicHistory.delete(sessionId);
-  }
-
-  /**
-   * 计算余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) return 0;
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-    if (denominator === 0) return 0;
-
-    return dotProduct / denominator;
   }
 
   /**

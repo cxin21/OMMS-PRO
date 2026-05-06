@@ -282,6 +282,16 @@ export interface ConsolidationConfig {
   vectorSearchLimit: number;
   /** 第一级筛选阈值, 默认 0.7 */
   candidateThreshold: number;
+  /** 每个记忆估算字节数（用于 potentialSavings），默认 500 */
+  estimatedSizePerMemory?: number;
+  /** 召回归一化除数（最大召回次数），默认 100 */
+  maxRecallNormalizer?: number;
+  /** 主记忆选择权重 */
+  primarySelectionWeights?: {
+    importance: number;
+    recall: number;
+    time: number;
+  };
 }
 
 /**

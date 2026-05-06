@@ -60,6 +60,8 @@ export class ProfileManager {
   private privacyManager: PrivacyManager;
   private cache: ProfileCache;
   private config: Required<ProfileManagerConfig>;
+  private maxTopInterests: number = 5;
+  private maxTopTraits: number = 3;
 
   constructor(options?: ProfileManagerOptions) {
     this.logger = createServiceLogger('ProfileManager');
@@ -79,6 +81,8 @@ export class ProfileManager {
 
     // 获取默认评分配置
     const profileServiceConfig = config.getConfigOrThrow<{
+      maxTopInterests?: number;
+      maxTopTraits?: number;
       defaultScores: {
         personaImportance: number;
         personaScopeScore: number;
@@ -120,6 +124,10 @@ export class ProfileManager {
       },
       defaultScores,
     };
+
+    // 从配置读取 top-N 限制
+    this.maxTopInterests = profileServiceConfig.maxTopInterests ?? 5;
+    this.maxTopTraits = profileServiceConfig.maxTopTraits ?? 3;
 
     // 合并用户配置
     if (options?.config) {
@@ -978,15 +986,15 @@ export class ProfileManager {
     if (persona.occupation) lines.push(`- Occupation: ${persona.occupation}`);
     if (persona.location) lines.push(`- Location: ${persona.location}`);
 
-    // 性格特征（Top 3）
+    // 性格特征（Top N — 从配置读取限制）
     if (persona.personalityTraits.length > 0) {
-      const topTraits = persona.personalityTraits.slice(0, 3);
+      const topTraits = persona.personalityTraits.slice(0, this.maxTopTraits);
       lines.push(`- Personality: ${topTraits.map(t => t.trait).join(', ')}`);
     }
 
-    // 兴趣（Top 5）
+    // 兴趣（Top N — 从配置读取限制）
     if (persona.interests.length > 0) {
-      const topInterests = persona.interests.slice(0, 5);
+      const topInterests = persona.interests.slice(0, this.maxTopInterests);
       lines.push(`- Interests: ${topInterests.map(i => i.name).join(', ')}`);
     }
 

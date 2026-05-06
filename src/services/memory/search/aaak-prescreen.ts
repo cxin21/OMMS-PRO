@@ -131,12 +131,14 @@ function calculateMatchScore(
  * @param query - 查询文本
  * @param candidateUids - 候选记忆 UID 列表
  * @param metaStore - 元数据存储接口
+ * @param minScore - 最小匹配分数阈值（可选，默认 0）
  * @returns 按匹配分数排序的 UID 列表（降序）
  */
 export async function prescreenByAAAK(
   query: string,
   candidateUids: string[],
-  metaStore: ISQLiteMetaStore
+  metaStore: ISQLiteMetaStore,
+  minScore: number = 0
 ): Promise<string[]> {
   if (candidateUids.length === 0) {
     return [];
@@ -171,10 +173,11 @@ export async function prescreenByAAAK(
     const aaakTag = meta.tags.find(tag => tag.startsWith('aaak:'));
 
     if (!aaakTag) {
-      // 没有 AAAK 标签的记忆，给予最低分数
+      // 没有 AAAK 标签的记忆，给予最低分数（而不是 0）
+      // 这样可以让没有 AAAK 标签的记忆也能参与排序，只是得分较低
       scoredResults.push({
         uid: meta.uid,
-        score: 0,
+        score: 0.1, // 最低分数，让无标签记忆能参与但不会优先
         matchDetails: { entityMatch: false, topicMatches: 0, emotionMatches: 0, flagMatches: 0 },
       });
       continue;
@@ -185,7 +188,7 @@ export async function prescreenByAAAK(
     if (!memoryEntry) {
       scoredResults.push({
         uid: meta.uid,
-        score: 0,
+        score: 0.1, // 解析失败时也给予最低分数
         matchDetails: { entityMatch: false, topicMatches: 0, emotionMatches: 0, flagMatches: 0 },
       });
       continue;
@@ -209,8 +212,10 @@ export async function prescreenByAAAK(
   // 4. 按分数降序排序
   scoredResults.sort((a, b) => b.score - a.score);
 
-  // 5. 返回排序后的 UID 列表
-  return scoredResults.map(r => r.uid);
+  // 5. 过滤低于 minScore 的结果，并返回排序后的 UID 列表
+  return scoredResults
+    .filter(r => r.score >= minScore)
+    .map(r => r.uid);
 }
 
 /**
@@ -255,7 +260,7 @@ export class AAAKPrescreener {
       if (!aaakTag) {
         results.push({
           uid: meta.uid,
-          score: 0,
+          score: 0.1,
           matchDetails: { entityMatch: false, topicMatches: 0, emotionMatches: 0, flagMatches: 0 },
         });
         continue;
@@ -265,7 +270,7 @@ export class AAAKPrescreener {
       if (!memoryEntry) {
         results.push({
           uid: meta.uid,
-          score: 0,
+          score: 0.1,
           matchDetails: { entityMatch: false, topicMatches: 0, emotionMatches: 0, flagMatches: 0 },
         });
         continue;

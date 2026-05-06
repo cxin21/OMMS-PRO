@@ -50,7 +50,9 @@ import { GraphReorganizer } from './graph/graph-reorganizer';
 import { StorageOptimizer } from './storage/storage-optimizer';
 import { DreamStorage } from './storage/dream-storage';
 import { config } from '../../shared/config';
+import { MemoryDefaults } from '../../config';
 import { ConfigLoader } from '../../shared/config/loader';
+import { MathUtils } from '../../shared/utils';
 import type { DreamingEngineConfig as DefaultDreamingEngineConfig } from '../../core/types/config';
 import { MemoryScope, MemoryType } from '../../types/memory';
 
@@ -166,10 +168,13 @@ export class DreamingManager {
       }
     }
 
-    // 初始化存储
-    // 注意：DreamStorage 需要 { dbPath?: string } 配置，但 DreamingEngineConfig 不包含 dbPath
-    // 所以传空对象，让 DreamStorage 从 ConfigManager 读取 dbPath
-    this.storage = new DreamStorage({});
+    // 初始化存储（带兜底路径，防止配置缺失导致构造失败）
+    try {
+      this.storage = new DreamStorage({});
+    } catch (error) {
+      this.logger.warn('Failed to initialize DreamStorage, using default path', { error: String(error) });
+      this.storage = new DreamStorage({ dbPath: './data/graph/dream_reports.db' });
+    }
   }
 
   /**
@@ -426,15 +431,9 @@ export class DreamingManager {
     if (input?.similarityThreshold !== undefined) {
       similarityThreshold = input.similarityThreshold;
     } else {
-      // 默认 similarityThreshold=0.85（来自 config.default.json）
-      let resolvedThreshold = 0.85;
-      if (config.isInitialized()) {
-        const consolidationConfig = config.getConfig<{ similarityThreshold?: number }>('dreamingEngine.consolidation');
-        if (consolidationConfig?.similarityThreshold) {
-          resolvedThreshold = consolidationConfig.similarityThreshold;
-        }
-      }
-      similarityThreshold = resolvedThreshold;
+      // Default from config (with MemoryDefaults fallback)
+      const consolidationConfig = config.getConfig<{ similarityThreshold?: number }>('dreamingEngine.consolidation');
+      similarityThreshold = consolidationConfig?.similarityThreshold ?? MemoryDefaults.mergeSimilarityThreshold;
     }
 
     const limit = input?.limit ?? 100;
@@ -628,7 +627,7 @@ export class DreamingManager {
         const otherVector = memoryVectors.get(otherMemory.uid);
         if (!otherVector) continue;
 
-        const similarity = this.cosineSimilarity(vector, otherVector);
+        const similarity = MathUtils.cosineSimilarity(vector, otherVector);
         if (similarity >= similarityThreshold) {
           similarMemories.push(otherMemory.uid);
           maxSimilarity = Math.max(maxSimilarity, similarity);
@@ -868,26 +867,6 @@ export class DreamingManager {
       const errorMsg = `LLM 归纳失败: ${error instanceof Error ? error.message : error}`;
       return { success: false, archivedCount: 0, error: errorMsg };
     }
-  }
-
-  /**
-   * 计算余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) return 0;
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
   /**

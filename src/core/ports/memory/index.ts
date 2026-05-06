@@ -6,7 +6,7 @@
  * @module ports/memory
  */
 
-import type { Memory, MemoryInput, RecallOptions, RecallResult, MemoryUpdate } from '../../types/memory';
+import type { Memory, MemoryInput, RecallOptions, RecallResult, MemoryUpdate } from '../../../types/memory';
 import type { SQLiteQueryOptions } from '../../../infrastructure/storage/core/types';
 
 // ============================================================

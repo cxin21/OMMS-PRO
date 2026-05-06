@@ -6,8 +6,8 @@
 export { RESTAPIServer, createRESTAPIServer } from './server';
 export type { ServerOptions } from './server';
 
-// 类型
-export * from './types';
+// 类型 — 已迁移到 src/types/api
+// API 类型现在从 src/types/api 统一导入
 
 // 中间件
 export * from './middleware';

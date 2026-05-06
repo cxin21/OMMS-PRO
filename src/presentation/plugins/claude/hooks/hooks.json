@@ -1,12 +1,12 @@
 {
-  "description": "OMMS-PRO memory system hooks for automatic memory recall and capture",
+  "description": "OMMS-PRO memory system hooks for automatic memory recall and capture (JS version)",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start/init-session",
+            "command": "/usr/local/bin/node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start/init-session.cjs",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-response/recall-memory",
+            "command": "/usr/local/bin/node ${CLAUDE_PLUGIN_ROOT}/hooks/pre-response/recall-memory.cjs",
             "timeout": 30
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-end/capture-session",
+            "command": "/usr/local/bin/node ${CLAUDE_PLUGIN_ROOT}/hooks/session-end/capture-session.cjs",
             "timeout": 60
           }
         ]

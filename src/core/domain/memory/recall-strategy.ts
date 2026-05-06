@@ -463,7 +463,7 @@ export class RecallStrategy {
    * 清理旧反馈
    */
   private cleanupOldFeedback(agentId: string): void {
-    const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days feedback retention (internal cleanup, non-configurable)
 
     for (const [key, entries] of this.feedbackHistory.entries()) {
       if (!key.startsWith(`${agentId}:`)) continue;

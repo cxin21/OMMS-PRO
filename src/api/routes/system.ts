@@ -6,7 +6,7 @@
 
 import { Router, Request, Response } from 'express';
 import { createReadStream, existsSync, statSync, readdirSync } from 'fs';
-import { join, basename, normalize, resolve } from 'path';
+import { join, basename, normalize } from 'path';
 import type { MemoryService } from '../../services/memory';
 import type { DreamingManager } from '../../services/dreaming/dreaming-manager';
 import type { ProfileManager } from '../../services/profile/profile-manager';
@@ -348,7 +348,6 @@ export function createSystemRoutes(deps: SystemRoutesDeps): Router {
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Transfer-Encoding', 'chunked');
 
-      let linesRead = 0;
       let bytesSkipped = 0;
       let totalLines = 0;
       const allLines: string[] = [];
@@ -442,18 +441,24 @@ export function createSystemRoutes(deps: SystemRoutesDeps): Router {
       const { path } = req.query as { path?: string };
       let configData;
 
+      // 递归脱敏函数 — 深度遍历所有嵌套层级
+      const redactSensitive = (obj: any, depth: number = 0): void => {
+        if (!obj || typeof obj !== 'object' || depth > 10) return;
+        const sensitiveKeys = ['apiKey', 'password', 'secret', 'token', 'api_key'];
+        for (const key of Object.keys(obj)) {
+          if (sensitiveKeys.some(k => key.toLowerCase().includes(k.toLowerCase()))) {
+            obj[key] = '***REDACTED***';
+          } else if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+            redactSensitive(obj[key], depth + 1);
+          }
+        }
+      };
+
       if (path) {
         configData = config.getConfig(path);
       } else {
         configData = config.getConfig() as Record<string, unknown>;
-        if (configData && typeof configData === 'object') {
-          const sensitiveKeys = ['apiKey', 'password', 'secret', 'token'];
-          for (const key of sensitiveKeys) {
-            if (key in configData) {
-              (configData as Record<string, unknown>)[key] = '***REDACTED***';
-            }
-          }
-        }
+        redactSensitive(configData);
       }
 
       res.json({

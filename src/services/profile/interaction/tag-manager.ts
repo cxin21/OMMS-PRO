@@ -46,7 +46,7 @@ export class TagManager {
     // 注意：profileService 是顶层配置，不是 memoryService.profileService
     let maxTags = 50;
     try {
-      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('profileService');
+      const profileConfig = config.getConfig<{ maxTagsPerUser: number }>('memoryService.profileService');
       if (profileConfig) {
         maxTags = profileConfig.maxTagsPerUser ?? maxTags;
       }

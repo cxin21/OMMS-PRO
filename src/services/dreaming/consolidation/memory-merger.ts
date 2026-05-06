@@ -13,6 +13,8 @@
  */
 
 import { createServiceLogger, type ILogger } from '../../../shared/logging';
+import { config } from '../../../shared/config';
+import { MathUtils } from '../../../shared/utils';
 import { TransactionCoordinator } from '../../memory/utils/transaction-manager';
 import type { StorageMemoryService } from '../../memory/core/storage-memory-service';
 import type { ILLMExtractor } from '../../memory/llm/llm-extractor';
@@ -63,6 +65,9 @@ export class MemoryMerger {
       semanticCheckThreshold: config?.semanticCheckThreshold ?? 0.5,
       vectorSearchLimit: config?.vectorSearchLimit ?? 20,
       candidateThreshold: config?.candidateThreshold ?? 0.7,
+      estimatedSizePerMemory: config?.estimatedSizePerMemory ?? 500,
+      maxRecallNormalizer: config?.maxRecallNormalizer ?? 100,
+      primarySelectionWeights: config?.primarySelectionWeights ?? { importance: 0.5, recall: 0.3, time: 0.2 },
     };
 
     // 初始化 LLM 语义检查器（如果提供了 llmExtractor）
@@ -101,7 +106,6 @@ export class MemoryMerger {
 
     // 2. 从 ConfigManager 获取（embedding.dimensions）
     try {
-      const { config } = require('../../../shared/config');
       if (config.isInitialized()) {
         const embeddingConfig = config.getConfig('embedding') as { dimensions?: number } | undefined;
         if (embeddingConfig?.dimensions) {
@@ -193,7 +197,7 @@ export class MemoryMerger {
     for (let i = 0; i < n; i++) {
       similarityMatrix[i] = [];
       for (let j = i + 1; j < n; j++) {
-        const sim = this.cosineSimilarity(vectors[i], vectors[j]);
+        const sim = MathUtils.cosineSimilarity(vectors[i], vectors[j]);
         if (sim >= this.getThresholds().candidateThreshold) {
           // 使用第一级阈值进行初步筛选
           unionFind.union(i, j);
@@ -255,7 +259,7 @@ export class MemoryMerger {
         mergedMemories: group.filter(id => id !== primaryMemory),
         similarity: avgSimilarity,
         reason: `三级检测通过：向量>=${this.getThresholds().candidateThreshold}, 主题相似, 语义相关`,
-        potentialSavings: group.length * 500,
+        potentialSavings: group.length * (this.config.estimatedSizePerMemory ?? 500),
       });
 
       this.logger.debug('找到相似记忆组', {
@@ -470,8 +474,9 @@ export class MemoryMerger {
       const recallCount = meta.recallCount ?? 0;
       const createdAt = meta.createdAt ?? 0;
 
-      // 归一化访问频率（假设最大访问次数为 100）
-      const normalizedRecall = Math.min(recallCount / 100, 1);
+      // 归一化访问频率（从配置读取归一化除数）
+      const normalizer = this.config.maxRecallNormalizer ?? 100;
+      const normalizedRecall = Math.min(recallCount / normalizer, 1);
 
       // 归一化创建时间：将时间戳归一化到 [0, 1] 范围
       // 如果 timeRange > 0，说明组内有时间差异，用 (createdAt - min) / range 归一化
@@ -480,7 +485,8 @@ export class MemoryMerger {
         ? (createdAt - minCreatedAt) / timeRange
         : (createdAt > 0 ? 0.5 : 0);
 
-      const score = importanceScore * 0.5 + normalizedRecall * 0.3 + normalizedTime * 0.2;
+      const weights = this.config.primarySelectionWeights ?? { importance: 0.5, recall: 0.3, time: 0.2 };
+      const score = importanceScore * weights.importance + normalizedRecall * weights.recall + normalizedTime * weights.time;
 
       if (score > bestScore) {
         bestScore = score;
@@ -672,26 +678,6 @@ export class MemoryMerger {
   }
 
   /**
-   * 计算两个向量的余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) return 0;
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
-
-  /**
    * 获取候选记忆的向量
    */
   private async getCandidateVectors(memoryIds: string[]): Promise<Map<string, number[]>> {
@@ -815,7 +801,7 @@ export class MemoryMerger {
         const v1 = vectors.get(memoryIds[i]);
         const v2 = vectors.get(memoryIds[j]);
         if (v1 && v2) {
-          totalSimilarity += this.cosineSimilarity(v1, v2);
+          totalSimilarity += MathUtils.cosineSimilarity(v1, v2);
           pairCount++;
         }
       }

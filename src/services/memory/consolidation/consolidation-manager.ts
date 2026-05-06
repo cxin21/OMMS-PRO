@@ -26,6 +26,7 @@ import type { SentimentResult } from '../analysis/sentiment-analyzer';
 import { SentimentAnalyzer } from '../analysis/sentiment-analyzer';
 import type { ILLMExtractor } from '../llm/llm-extractor';
 import { config } from '../../../shared/config';
+import { MathUtils } from '../../../shared/utils';
 import type { MemoryConsolidationConfig } from '../../../core/types/config';
 
 // Keep local interface for backward compatibility
@@ -364,7 +365,7 @@ export class ConsolidationManager {
         const vector2 = vectorMap.get(memory2.uid);
         if (!vector2) continue;
 
-        const similarity = this.cosineSimilarity(vector1, vector2);
+        const similarity = MathUtils.cosineSimilarity(vector1, vector2);
         if (similarity >= this.config.merge.similarityThreshold) {
           group.push(memory2.uid);
           processed.add(memory2.uid);
@@ -717,28 +718,6 @@ export class ConsolidationManager {
     });
 
     return true;
-  }
-
-  /**
-   * 计算余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) return 0;
-
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-    if (denominator === 0) return 0;
-
-    return dotProduct / denominator;
   }
 
   /**

@@ -42,19 +42,32 @@ export interface GraphRetryQueueConfig {
  * 获取 GraphRetryQueue 配置
  * 优先从 ConfigManager 读取，否则使用 MemoryDefaults
  */
-function getGraphRetryQueueConfig(): { maxRetries: number; retryDelayMs: number; graphBasePath: string } {
+function getGraphRetryQueueConfig(): { maxRetries: number; retryDelayMs: number; graphBasePath: string; intervalMs: number } {
   let graphBasePath = './data';
+  let maxRetries: number = 3;
+  let retryDelayMs: number = MemoryDefaults.graphRetryDelayMs;
+  let intervalMs = 30000;
   if (config.isInitialized()) {
     const storageConfig = config.getConfig<{ graphBasePath?: string }>('memoryService.storage');
     if (storageConfig?.graphBasePath) {
       graphBasePath = storageConfig.graphBasePath;
     }
+    const indexUpdateConfig = config.getConfig<{ maxRetries?: number; graphRetryDelayMs?: number; graphRetryIntervalMs?: number }>('memoryService.indexUpdate');
+    if (indexUpdateConfig?.maxRetries !== undefined) {
+      maxRetries = indexUpdateConfig.maxRetries;
+    }
+    if (indexUpdateConfig?.graphRetryDelayMs !== undefined) {
+      retryDelayMs = indexUpdateConfig.graphRetryDelayMs;
+    }
+    if (indexUpdateConfig?.graphRetryIntervalMs !== undefined) {
+      intervalMs = indexUpdateConfig.graphRetryIntervalMs;
+    }
   }
-  // 默认重试配置
   return {
-    maxRetries: 3,
-    retryDelayMs: MemoryDefaults.graphRetryDelayMs,
+    maxRetries,
+    retryDelayMs,
     graphBasePath,
+    intervalMs,
   };
 }
 
@@ -83,19 +96,20 @@ export class GraphRetryQueue {
 
   constructor(userConfig?: Partial<GraphRetryQueueConfig>) {
     // 优先使用传入配置，否则从 ConfigManager 获取
-    let maxRetries = 3;
-    let retryDelayMs = 5000;
-    let graphBasePath: string;
+    const defaultConfig = getGraphRetryQueueConfig();
 
     if (userConfig && Object.keys(userConfig).length > 0) {
-      maxRetries = userConfig.maxRetries ?? maxRetries;
-      retryDelayMs = userConfig.retryDelayMs ?? retryDelayMs;
-      this.config = { maxRetries, retryDelayMs, queueFilePath: userConfig.queueFilePath, dlqFilePath: userConfig.dlqFilePath };
+      this.config = {
+        maxRetries: userConfig.maxRetries ?? defaultConfig.maxRetries,
+        retryDelayMs: userConfig.retryDelayMs ?? defaultConfig.retryDelayMs,
+        queueFilePath: userConfig.queueFilePath,
+        dlqFilePath: userConfig.dlqFilePath,
+      };
     } else {
-      const defaultConfig = getGraphRetryQueueConfig();
-      maxRetries = defaultConfig.maxRetries;
-      retryDelayMs = defaultConfig.retryDelayMs;
-      this.config = { maxRetries, retryDelayMs };
+      this.config = {
+        maxRetries: defaultConfig.maxRetries,
+        retryDelayMs: defaultConfig.retryDelayMs,
+      };
     }
 
     this.logger = createServiceLogger('GraphRetryQueue');
@@ -109,14 +123,14 @@ export class GraphRetryQueue {
         const storageConfig = config.isInitialized()
           ? config.getConfig<{ graphBasePath?: string }>('memoryService.storage')
           : null;
-        graphBasePath = storageConfig?.graphBasePath || getGraphRetryQueueConfig().graphBasePath;
-        this.queueFilePath = join(graphBasePath, 'graph-retry-queue.json');
-        this.dlqFilePath = join(graphBasePath, 'graph-dlq.json');
+        const basePath = storageConfig?.graphBasePath || defaultConfig.graphBasePath;
+        this.queueFilePath = join(basePath, 'graph-retry-queue.json');
+        this.dlqFilePath = join(basePath, 'graph-dlq.json');
       } catch {
         // Fallback: use config default path
-        graphBasePath = './data';
-        this.queueFilePath = join(graphBasePath, 'graph-retry-queue.json');
-        this.dlqFilePath = join(graphBasePath, 'graph-dlq.json');
+        const fallbackPath = defaultConfig.graphBasePath;
+        this.queueFilePath = join(fallbackPath, 'graph-retry-queue.json');
+        this.dlqFilePath = join(fallbackPath, 'graph-dlq.json');
       }
     }
   }

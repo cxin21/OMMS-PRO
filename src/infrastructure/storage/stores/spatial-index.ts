@@ -17,6 +17,10 @@
 
 import { createServiceLogger, type ILogger } from '../../../shared/logging';
 import { config } from '../../../shared/config';
+import Database from 'better-sqlite3';
+import { FileUtils } from '../../../shared/utils/file';
+import { MathUtils } from '../../../shared/utils';
+import { dirname } from 'path';
 
 export interface SpatialIndexConfig {
   enabled: boolean;
@@ -48,6 +52,8 @@ export class SpatialIndex {
   private records: Map<string, SpatialRecord>;  // memoryUid -> SpatialRecord
   private episodeMembers: Map<string, Set<string>>;  // episodeId -> Set<memoryUid>
   private dirty: boolean = false;  // 是否有未保存的更改
+  private db: Database.Database | null = null;
+  private dbPath: string = '';
 
   constructor(userConfig: Partial<SpatialIndexConfig> = {}) {
     this.logger = createServiceLogger('SpatialIndex');
@@ -78,10 +84,80 @@ export class SpatialIndex {
     const spatialConfig = config.getConfigOrThrow<SpatialIndexConfig>('memoryService.spatial');
     this.config = { ...this.config, ...spatialConfig };
 
+    // Initialize SQLite persistence
+    try {
+      const storageConfig = config.getConfigOrThrow<{ graphBasePath: string }>('memoryService.storage');
+      this.dbPath = storageConfig.graphBasePath + '/spatial_index.db';
+      await FileUtils.ensureDirectory(dirname(this.dbPath));
+      this.db = new Database(this.dbPath);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS spatial_records (
+          memoryUid TEXT PRIMARY KEY,
+          coordinates TEXT NOT NULL,
+          palaceRef TEXT NOT NULL,
+          episodeId TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        )
+      `);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_spatial_episode ON spatial_records(episodeId)`);
+      this.loadFromDb();
+    } catch (error) {
+      this.logger.warn('SpatialIndex persistence unavailable, running in memory-only mode', { error: String(error) });
+    }
+
     this.logger.info('SpatialIndex initialized', {
       dimensions: this.config.dimensions,
       autoLayout: this.config.autoLayout,
+      persistedCount: this.records.size,
     });
+  }
+
+  private loadFromDb(): void {
+    if (!this.db) return;
+    const rows = this.db.prepare('SELECT * FROM spatial_records').all() as any[];
+    for (const row of rows) {
+      const record: SpatialRecord = {
+        memoryUid: row.memoryUid,
+        coordinates: JSON.parse(row.coordinates),
+        palaceRef: row.palaceRef,
+        episodeId: row.episodeId || undefined,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+      this.records.set(row.memoryUid, record);
+      if (record.episodeId) {
+        if (!this.episodeMembers.has(record.episodeId)) {
+          this.episodeMembers.set(record.episodeId, new Set());
+        }
+        this.episodeMembers.get(record.episodeId)!.add(row.memoryUid);
+      }
+    }
+    this.dirty = false;
+    this.logger.info('SpatialIndex loaded from database', { count: rows.length });
+  }
+
+  async save(): Promise<void> {
+    if (!this.db || !this.dirty) return;
+    const upsert = this.db.prepare(`
+      INSERT INTO spatial_records (memoryUid, coordinates, palaceRef, episodeId, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(memoryUid) DO UPDATE SET
+        coordinates = excluded.coordinates,
+        palaceRef = excluded.palaceRef,
+        episodeId = excluded.episodeId,
+        updatedAt = excluded.updatedAt
+    `);
+    const deleteStmt = this.db.prepare('DELETE FROM spatial_records WHERE memoryUid = ?');
+    const tx = this.db.transaction(() => {
+      // Upsert all current records
+      for (const [uid, record] of this.records) {
+        upsert.run(uid, JSON.stringify(record.coordinates), record.palaceRef, record.episodeId || null, record.createdAt, Date.now());
+      }
+    });
+    tx();
+    this.dirty = false;
+    this.logger.debug('SpatialIndex saved', { count: this.records.size });
   }
 
   /**
@@ -112,6 +188,7 @@ export class SpatialIndex {
     }
 
     this.dirty = true;
+    this.save().catch(err => this.logger.warn('SpatialIndex auto-save failed', { error: String(err) }));
     this.logger.debug('Spatial position set', { memoryUid, coordinates });
   }
 
@@ -341,6 +418,7 @@ export class SpatialIndex {
       }
       this.records.delete(memoryUid);
       this.dirty = true;
+      this.save().catch(err => this.logger.warn('SpatialIndex auto-save failed on remove', { error: String(err) }));
     }
   }
 
@@ -364,7 +442,14 @@ export class SpatialIndex {
       record.episodeId = episodeId;
       record.updatedAt = Date.now();
       this.dirty = true;
+      this.save().catch(err => this.logger.warn('SpatialIndex auto-save failed on updateEpisode', { error: String(err) }));
     }
+  }
+
+  async close(): Promise<void> {
+    await this.save();
+    if (this.db) { this.db.close(); this.db = null; }
+    this.logger.info('SpatialIndex closed');
   }
 
   /**
@@ -431,7 +516,7 @@ export class SpatialIndex {
     for (const [uid, vec] of existingVectors) {
       if (!existingPositions.has(uid)) continue;
 
-      const similarity = this.cosineSimilarity(targetVector, vec);
+      const similarity = MathUtils.cosineSimilarity(targetVector, vec);
       results.push({
         uid,
         position: existingPositions.get(uid)!,
@@ -454,26 +539,6 @@ export class SpatialIndex {
       sum += Math.pow(a[i] - b[i], 2);
     }
     return Math.sqrt(sum);
-  }
-
-  /**
-   * 计算余弦相似度
-   */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    for (let i = 0; i < a.length && i < b.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-
-    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-    if (denominator === 0) return 0;
-
-    return dotProduct / denominator;
   }
 
   /**

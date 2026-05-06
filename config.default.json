@@ -122,7 +122,10 @@
       "keywordWeight": 0.3,
       "includeVersionChain": true,
       "bm25K1": 1.5,
-      "bm25B": 0.75
+      "bm25B": 0.75,
+      "minMemories": 3,
+      "maxMemories": 20,
+      "minImportanceRatio": 0.6
     },
     "forget": {
       "enabled": true,
@@ -192,6 +195,13 @@
       "scheduleHour": 3,
       "maxMemoriesPerCycle": 50,
       "minRecallCount": 3,
+      "estimatedSizePerMemory": 500,
+      "maxRecallNormalizer": 100,
+      "primarySelectionWeights": {
+        "importance": 0.5,
+        "recall": 0.3,
+        "time": 0.2
+      },
       "actions": {
         "compress": true,
         "link": true,
@@ -283,7 +293,9 @@
       "maxPendingTasks": 10000,
       "highPriorityThreshold": 0.8,
       "scheduledIntervalMs": 60000,
-      "maxRetries": 3
+      "maxRetries": 3,
+      "graphRetryDelayMs": 5000,
+      "graphRetryIntervalMs": 30000
     },
     "recallStrategy": {
       "timeDecayFactor": 0.5,
@@ -331,10 +343,14 @@
       "dreamReportsDbPath": "./data/graph/dream_reports.db",
       "interactionDbPath": "./data/interactions.db",
       "graphProcessorIntervalMs": 30000,
-      "tagDbPath": "./data/tags.db"
+      "tagDbPath": "./data/tags.db",
+      "roomClusterDbPath": "./data/graph/room_clusters.db",
+      "memoryRoomMappingDbPath": "./data/graph/memory_room_mapping.db"
     },
     "profileService": {
       "maxTagsPerUser": 50,
+      "maxTopInterests": 5,
+      "maxTopTraits": 3,
       "preferenceInferer": {
         "minInteractions": 10,
         "confidenceThreshold": 0.6,
@@ -348,6 +364,13 @@
         "preferenceImportance": 7,
         "preferenceScopeScore": 7
       }
+    },
+    "aaak": {
+      "enabled": true,
+      "minScore": 0
+    },
+    "session": {
+      "defaultSessionId": "default-session"
     }
   },
   "embedding": {
@@ -383,13 +406,21 @@
       "topicSimilarityThreshold": 0.5,
       "semanticCheckThreshold": 0.5,
       "vectorSearchLimit": 20,
-      "candidateThreshold": 0.7
+      "candidateThreshold": 0.7,
+      "estimatedSizePerMemory": 500,
+      "maxRecallNormalizer": 100,
+      "primarySelectionWeights": {
+        "importance": 0.5,
+        "recall": 0.3,
+        "time": 0.2
+      }
     },
     "reorganization": {
       "minEdgeWeight": 0.3,
       "densityTarget": 0.5,
       "orphanThreshold": 0.2,
-      "maxNewRelationsPerCycle": 30
+      "maxNewRelationsPerCycle": 30,
+      "minNewRelationSimilarity": 0.7
     },
     "archival": {
       "importanceThreshold": 2,

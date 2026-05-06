@@ -34,8 +34,6 @@
     "better-sqlite3": "^11.8.1",
     "compression": "^1.8.1",
     "express": "^4.x",
-    "uuid": "^9.x",
-    "winston": "^3.x",
     "ws": "^8.18.0",
     "zod": "^3.x"
   },

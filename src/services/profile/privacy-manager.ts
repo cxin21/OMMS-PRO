@@ -106,34 +106,6 @@ export class PrivacyManager {
   }
 
   /**
-   * 导出用户数据
-   * @deprecated v2.0.0: 此方法已废弃，请使用 ProfileManager.exportUserData()
-   *              PrivacyManager 不持有数据，只管理敏感标记
-   */
-  exportUserData(
-    _userId: string,
-    _format: ExportFormat = 'json',
-    _options?: {
-      includePersona?: boolean;
-      includePreferences?: boolean;
-      includeInteractions?: boolean;
-      includeTags?: boolean;
-      includeSensitive?: boolean;
-      dateRange?: {
-        start: number;
-        end: number;
-      };
-    }
-  ): UserDataExport {
-    this.logger.error('PrivacyManager.exportUserData is deprecated, use ProfileManager.exportUserData instead');
-    throw new Error(
-      'PrivacyManager.exportUserData is deprecated. ' +
-      'Please use ProfileManager.exportUserData() for proper data export ' +
-      'with access to MemoryService, InteractionRecorder, and TagManager.'
-    );
-  }
-
-  /**
    * 删除用户数据（被遗忘权）
    * v2.0.0: 注意 - 需要 MemoryService 注入才能执行实际删除
    */
@@ -219,40 +191,6 @@ export class PrivacyManager {
       autoExpireEnabled: this.options.autoExpireDays > 0,
       autoExpireDays: this.options.autoExpireDays,
     };
-  }
-
-  /**
-   * 匿名化文本
-   */
-  private anonymizeText(text: string): string {
-    // 简单的匿名化处理
-    let anonymized = text;
-
-    // 替换邮箱
-    anonymized = anonymized.replace(
-      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
-      '[EMAIL]'
-    );
-
-    // 替换手机号
-    anonymized = anonymized.replace(
-      /\b1[3-9]\d{9}\b/g,
-      '[PHONE]'
-    );
-
-    // 替换身份证号
-    anonymized = anonymized.replace(
-      /\b\d{17}[\dXx]\b/g,
-      '[ID_CARD]'
-    );
-
-    // 替换地址（简单模式）
-    anonymized = anonymized.replace(
-      /(省|市|区|县|街道|镇|乡).{0,20}/g,
-      '[ADDRESS]'
-    );
-
-    return anonymized;
   }
 
   /**

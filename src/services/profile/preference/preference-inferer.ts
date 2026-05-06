@@ -57,7 +57,7 @@ export class PreferenceInferer {
     let managerConfig: Partial<PreferenceInfererOptions> = {};
     if (config.isInitialized()) {
       try {
-        const cfg = config.getConfig<PreferenceInfererOptions>('profileService.preferenceInferer');
+        const cfg = config.getConfig<PreferenceInfererOptions>('memoryService.profileService.preferenceInferer');
         if (cfg) {
           managerConfig = cfg;
         }

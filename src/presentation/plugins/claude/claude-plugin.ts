@@ -29,8 +29,6 @@ export interface ClaudePluginConfig {
   mcpPort?: number;
   /** 是否启用 hooks */
   enableHooks?: boolean;
-  /** 是否启用 skills */
-  enableSkills?: boolean;
   /** API URL */
   apiUrl?: string;
   /** Agent ID */
@@ -57,7 +55,6 @@ export class ClaudePlugin implements IPlugin {
       rootDir: userConfig?.rootDir ?? join(defaults.rootDir, 'omms-pro'),
       mcpPort: userConfig?.mcpPort ?? defaults.mcpPort,
       enableHooks: userConfig?.enableHooks ?? true,
-      enableSkills: userConfig?.enableSkills ?? true,
       apiUrl: userConfig?.apiUrl ?? defaults.apiUrl,
       agentId: userConfig?.agentId ?? defaults.agentId,
     };
@@ -71,7 +68,6 @@ export class ClaudePlugin implements IPlugin {
    */
   private getDefaultsFromConfig(): { rootDir: string; mcpPort: number; apiUrl: string; agentId: string } {
     try {
-      const pluginsConfig = config.getConfig('plugins') as { rootDir?: string } | undefined;
       const apiConfig = config.getConfig('api') as { port?: number; host?: string } | undefined;
       const agentId = config.getConfig('agentId') as string | undefined;
 
@@ -79,7 +75,7 @@ export class ClaudePlugin implements IPlugin {
       const host = apiConfig?.host ?? 'localhost';
 
       return {
-        rootDir: pluginsConfig?.rootDir ?? './plugins',
+        rootDir: './plugins',
         mcpPort: port,
         apiUrl: `http://${host}:${port}/api/v1`,
         agentId: agentId ?? 'claude-code',
@@ -281,7 +277,6 @@ export class ClaudePlugin implements IPlugin {
    *   ├── .claude-plugin/plugin.json   # 插件清单（必需）
    *   ├── hooks/hooks.json             # Hook 定义（${CLAUDE_PLUGIN_ROOT} 变量）
    *   ├── .mcp.json                    # MCP 服务器配置
-   *   ├── skills/                      # 技能目录
    *   └── agents/                      # Agent 定义目录
    *
    * 安装后使用 `claude --plugin-dir <path>` 加载，或发布到 marketplace。

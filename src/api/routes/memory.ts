@@ -18,13 +18,12 @@ import { config } from '../../shared/config';
 function getDefaultAgentId(): string {
   try {
     if (config.isInitialized()) {
-      const agentId = config.getConfig('agentId') as string | undefined;
+      const agentId = config.getConfig<string>('agentId');
       if (agentId) return agentId;
-      const apiConfig = config.getConfig('api') as any;
+      const apiConfig = config.getConfig<{ agentId?: string }>('api');
       if (apiConfig?.agentId) return apiConfig.agentId;
     }
   } catch { /* ignore */ }
-  // 配置不可用时抛出错误，禁止使用硬编码 fallback
   throw new Error('ConfigManager not initialized and no agentId configured');
 }
 
@@ -35,13 +34,11 @@ function getDefaultSessionId(): string {
   try {
     if (config.isInitialized()) {
       // 尝试从 memoryService.session 获取
-      const sessionConfig = config.getConfig('memoryService.session') as any;
+      const sessionConfig = config.getConfig<{ defaultSessionId?: string }>('memoryService.session');
       if (sessionConfig?.defaultSessionId) return sessionConfig.defaultSessionId;
-      // 尝试从 memoryService.agentId 生成会话ID（使用 agentId 作为前缀）
-      const agentId = config.getConfig('memoryService.agentId') as string | undefined;
+      const agentId = config.getConfig<string>('memoryService.agentId');
       if (agentId) return `session-${agentId}-${Date.now()}`;
-      // 尝试从顶层 agentId 生成
-      const topAgentId = config.getConfig('agentId') as string | undefined;
+      const topAgentId = config.getConfig<string>('agentId');
       if (topAgentId) return `session-${topAgentId}-${Date.now()}`;
     }
   } catch { /* ignore */ }
@@ -58,15 +55,306 @@ function getConversationThreshold(): number {
   try {
     if (config.isInitialized()) {
       // 优先从 memoryService.capture 获取
-      const captureConfig = config.getConfig('memoryService.capture') as any;
-      if (captureConfig?.conversationThreshold) return captureConfig.conversationThreshold;
-      // 降级使用 memoryService.store.chunkThreshold
-      const storeConfig = config.getConfig('memoryService.store') as any;
-      if (storeConfig?.chunkThreshold) return storeConfig.chunkThreshold;
+      const captureConfig = config.getConfig<{ conversationThreshold?: number }>('memoryService.capture');
+      if (captureConfig?.conversationThreshold !== undefined) return captureConfig.conversationThreshold;
+      const storeConfig = config.getConfig<{ chunkThreshold?: number }>('memoryService.store');
+      if (storeConfig?.chunkThreshold !== undefined) return storeConfig.chunkThreshold;
     }
   } catch { /* ignore */ }
-  return config.getConfig<number>('memoryService.capture.conversationThreshold') ?? 500;
+  // 禁止硬编码默认值，必须从配置读取
+  throw new Error('conversationThreshold not configured in memoryService.capture or memoryService.store');
 }
+
+// ========== 分块上传存储 (内存 + 文件双写) ==========
+interface ChunkData {
+  content: string;
+  timestamp: number;
+}
+
+interface ChunkedCaptureSession {
+  captureId: string;
+  sessionId: string;
+  agentId: string;
+  totalChunks: number;
+  receivedChunks: Map<number, ChunkData>;
+  createdAt: number;
+  metadata?: Record<string, unknown>;
+}
+
+// 内存存储（进程内）+ 文件备份（重启可恢复）
+const chunkedSessions = new Map<string, ChunkedCaptureSession>();
+const CHUNK_SESSION_TTL_MS = 30 * 60 * 1000; // 30 分钟超时
+
+// 获取 chunk 存储目录
+function getChunkStorageDir(): string {
+  try {
+    if (config.isInitialized()) {
+      const storageConfig = config.getConfig<{ graphBasePath?: string }>('memoryService.storage');
+      return storageConfig?.graphBasePath
+        ? `${storageConfig.graphBasePath}/chunks`
+        : './data/chunks';
+    }
+  } catch { /* ignore */ }
+  return './data/chunks';
+}
+
+// 保存 chunk 到文件（备份）
+async function saveChunkToFile(captureId: string, chunkIndex: number, content: string): Promise<void> {
+  try {
+    const dir = getChunkStorageDir();
+    const { mkdir, writeFile } = await import('fs/promises');
+    const { join } = await import('path');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${captureId}_${chunkIndex}.chunk`), content, 'utf8');
+  } catch { /* ignore */ }
+}
+
+// 读取文件中的 chunk
+async function loadChunkFromFile(captureId: string, chunkIndex: number): Promise<string | null> {
+  try {
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const dir = getChunkStorageDir();
+    return await readFile(join(dir, `${captureId}_${chunkIndex}.chunk`), 'utf8');
+  } catch { return null; }
+}
+
+// P0 FIX: 删除指定 captureId 的所有 chunk 文件
+async function deleteChunkFiles(captureId: string, totalChunks: number): Promise<void> {
+  try {
+    const { unlink } = await import('fs/promises');
+    const { join } = await import('path');
+    const dir = getChunkStorageDir();
+    const deletePromises: Promise<void>[] = [];
+    for (let i = 0; i < totalChunks; i++) {
+      deletePromises.push(
+        unlink(join(dir, `${captureId}_${i}.chunk`)).catch(() => { /* ignore if not exists */ })
+      );
+    }
+    await Promise.all(deletePromises);
+  } catch { /* ignore cleanup errors */ }
+}
+
+// 清理过期的 chunk session
+function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  for (const [captureId, session] of chunkedSessions.entries()) {
+    if (now - session.createdAt > CHUNK_SESSION_TTL_MS) {
+      chunkedSessions.delete(captureId);
+    }
+  }
+}
+
+// 分块捕获处理函数
+async function handleChunkedCapture(
+  req: Request,
+  res: Response,
+  opts: {
+    content: string;
+    finalAgentId: string;
+    finalSessionId: string;
+    type?: string;
+    scores?: { importance: number; scopeScore: number };
+    tags?: string[];
+    chunkIndex: number;
+    totalChunks: number;
+    captureId?: string;
+    deps: MemoryRoutesDeps;
+  }
+): Promise<void> {
+  const { content, finalAgentId, finalSessionId, type, scores, tags, chunkIndex, totalChunks, captureId: incomingCaptureId, deps } = opts;
+
+  // P0 FIX: 验证 chunkIndex 和 totalChunks 范围
+  if (typeof chunkIndex !== 'number' || typeof totalChunks !== 'number') {
+    res.status(400).json({ success: false, error: 'chunkIndex and totalChunks must be numbers' });
+    deps.logger?.error('chunked-capture: invalid chunk parameters', { chunkIndex, totalChunks });
+    return;
+  }
+  if (totalChunks <= 0) {
+    res.status(400).json({ success: false, error: 'totalChunks must be greater than 0' });
+    deps.logger?.error('chunked-capture: invalid totalChunks', { totalChunks });
+    return;
+  }
+  if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+    res.status(400).json({
+      success: false,
+      error: `chunkIndex must be between 0 and ${totalChunks - 1}, got ${chunkIndex}`,
+    });
+    deps.logger?.error('chunked-capture: chunkIndex out of range', { chunkIndex, totalChunks });
+    return;
+  }
+
+  // 清理过期 session
+  cleanupExpiredSessions();
+
+  // 第一个 chunk：创建 session；后续 chunk：验证 session
+  let captureId: string;
+  let isLastChunk = chunkIndex === totalChunks - 1;
+
+  if (chunkIndex === 0) {
+    // 第一个 chunk：创建新 session
+    captureId = incomingCaptureId || `chunk-${finalAgentId}-${finalSessionId}-${Date.now()}`;
+    chunkedSessions.set(captureId, {
+      captureId,
+      sessionId: finalSessionId,
+      agentId: finalAgentId,
+      totalChunks,
+      receivedChunks: new Map(),
+      createdAt: Date.now(),
+    });
+  } else {
+    // 后续 chunk：验证 captureId 存在
+    if (!incomingCaptureId) {
+      res.status(400).json({ success: false, error: 'captureId is required for chunk > 0' });
+      return;
+    }
+    const session = chunkedSessions.get(incomingCaptureId);
+    if (!session) {
+      res.status(400).json({ success: false, error: 'captureId not found or expired' });
+      return;
+    }
+    if (session.totalChunks !== totalChunks) {
+      res.status(400).json({ success: false, error: 'totalChunks mismatch' });
+      return;
+    }
+    captureId = incomingCaptureId;
+  }
+
+  // 存储 chunk（内存 + 文件）
+  const session = chunkedSessions.get(captureId)!;
+  session.receivedChunks.set(chunkIndex, { content, timestamp: Date.now() });
+  await saveChunkToFile(captureId, chunkIndex, content);
+
+  // 如果不是最后一个 chunk，返回部分完成
+  if (!isLastChunk) {
+    res.status(200).json({
+      success: true,
+      data: {
+        captureId,
+        chunkIndex,
+        status: 'partial',
+        receivedChunks: session.receivedChunks.size,
+        totalChunks,
+      },
+    });
+    return;
+  }
+
+  // 最后一个 chunk：检查是否所有 chunk 都已接收
+  if (session.receivedChunks.size < totalChunks) {
+    res.status(200).json({
+      success: true,
+      data: {
+        captureId,
+        chunkIndex,
+        status: 'partial',
+        receivedChunks: session.receivedChunks.size,
+        totalChunks,
+        missingChunks: totalChunks - session.receivedChunks.size,
+      },
+    });
+    return;
+  }
+
+  // 合并所有 chunk
+  let fullContent = '';
+  const missingChunks: number[] = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const chunk = session.receivedChunks.get(i);
+    if (chunk) {
+      fullContent += chunk.content;
+    } else {
+      // 尝试从文件加载
+      const fromFile = await loadChunkFromFile(captureId, i);
+      if (fromFile) {
+        fullContent += fromFile;
+      } else {
+        // P0 FIX: 记录缺失的 chunk，不再静默跳过
+        missingChunks.push(i);
+      }
+    }
+  }
+
+  // P0 FIX: 如果有缺失的 chunk，返回错误而不是返回 complete
+  if (missingChunks.length > 0) {
+    deps.logger?.error('chunked-capture: missing chunks detected', {
+      captureId,
+      missingChunks,
+      receivedChunks: session.receivedChunks.size,
+      totalChunks,
+    });
+    res.status(400).json({
+      success: false,
+      error: 'missing chunks detected',
+      data: {
+        captureId,
+        missingChunks,
+        receivedChunks: session.receivedChunks.size,
+        totalChunks,
+      },
+    });
+    return;
+  }
+
+  // P0 FIX: 合并成功后清理 chunk 文件
+  await deleteChunkFiles(captureId, totalChunks);
+
+  // 清理 session
+  chunkedSessions.delete(captureId);
+
+  // 继续正常的 capture 流程
+  deps.logger?.info('chunked-capture: all chunks received, merging', { captureId, fullContentLength: fullContent.length });
+
+  const storeConfig = config.getConfig<{ defaultImportance?: number; defaultScopeScore?: number }>('memoryService.store');
+  const defaultImportance = storeConfig?.defaultImportance ?? 5;
+  const defaultScopeScore = storeConfig?.defaultScopeScore ?? defaultImportance;
+  const finalScores = {
+    importance: scores?.importance ?? defaultImportance,
+    scopeScore: scores?.scopeScore ?? scores?.importance ?? defaultScopeScore,
+  };
+
+  const memory = await deps.memoryService.store(
+    {
+      content: fullContent,
+      type: (type as MemoryType) || 'event' as MemoryType,
+      metadata: {
+        agentId: finalAgentId,
+        sessionId: finalSessionId,
+        source: 'captured',
+        tags: tags ?? [],
+        isChunked: true,
+        chunkInfo: { captureId, totalChunks },
+      },
+    },
+    finalScores
+  );
+
+  // 异步记录到用户画像
+  if (deps.profileManager) {
+    deps.profileManager.recordInteraction(
+      finalAgentId,
+      'memory_capture',
+      fullContent,
+      undefined,
+      { memoryId: memory.uid, type: memory.type, importance: memory.importance },
+      finalSessionId,
+      finalAgentId,
+      [memory.uid]
+    ).catch(() => { /* ignore */ });
+  }
+
+  res.status(201).json({
+    success: true,
+    data: {
+      uid: memory.uid,
+      captureId,
+      totalChunks,
+      mergedContentLength: fullContent.length,
+      status: 'complete',
+    },
+  });
+}
+// ========== 分块上传处理结束 ==========
 
 export interface MemoryRoutesDeps {
   memoryService: MemoryService;
@@ -80,9 +368,9 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
   // Debug log for captureService
   if (deps.captureService) {
-    console.log('[createMemoryRoutes] captureService is available');
+    deps.logger?.info('createMemoryRoutes: captureService is available');
   } else {
-    console.log('[createMemoryRoutes] captureService is UNDEFINED - LLM extraction will be skipped');
+    deps.logger?.warn('createMemoryRoutes: captureService is UNDEFINED - LLM extraction will be skipped');
   }
 
   /**
@@ -113,6 +401,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         },
       });
     } catch (error) {
+      deps.logger?.error('memories.list: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get memories',
@@ -127,10 +416,19 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 智能处理：
    * - 短内容（< 500字符）：直接存储
    * - 长内容/对话（>= 500字符）：使用 LLM 提取关键记忆
+   *
+   * 分块上传支持：
+   * - chunkIndex: 当前 chunk 索引 (0-based)
+   * - totalChunks: 总 chunk 数
+   * - captureId: 合并 ID（跨 chunk 一致）
+   * - 第一个 chunk 应设置 chunkIndex=0 且不设置 captureId
    */
   router.post('/capture', async (req: Request, res: Response) => {
     try {
-      const { content, contentBase64, agentId, sessionId, type, scores, tags, useLLMExtraction } = req.body as {
+      const {
+        content, contentBase64, agentId, sessionId, type, scores, tags, useLLMExtraction,
+        chunkIndex, totalChunks, captureId,
+      } = req.body as {
         content?: string;
         contentBase64?: string;
         agentId?: string;
@@ -139,6 +437,9 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         scores?: { importance: number; scopeScore: number };
         tags?: string[];
         useLLMExtraction?: boolean;
+        chunkIndex?: number;
+        totalChunks?: number;
+        captureId?: string;
       };
 
       // 支持 base64 编码的 content（避免 shell 转义问题）
@@ -167,6 +468,25 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
       const finalAgentId = agentId || getDefaultAgentId();
       const finalSessionId = sessionId || getDefaultSessionId();
 
+      // ========== 分块上传处理 ==========
+      const isChunkedUpload = typeof chunkIndex === 'number' && typeof totalChunks === 'number';
+      if (isChunkedUpload) {
+        await handleChunkedCapture(req, res, {
+          content: finalContent,
+          finalAgentId,
+          finalSessionId,
+          type,
+          scores,
+          tags,
+          chunkIndex,
+          totalChunks,
+          captureId,
+          deps,
+        });
+        return;
+      }
+      // ========== 分块上传处理结束 ==========
+
       // 检测是否是对话内容（多行、包含用户/助手标记等）
       const conversationThreshold = getConversationThreshold();
       const isConversationContent =
@@ -178,12 +498,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
       // 如果提供了 captureService 且内容是对话或显式要求使用 LLM 提取
       if (deps.captureService && shouldUseLLMExtraction) {
-        console.log('[capture] Using LLM extraction - captureService available, content length:', finalContent.length);
-        if (deps.logger) {
-          deps.logger.info('[capture] Using LLM extraction for conversation content', { contentLength: finalContent.length });
-        } else {
-          console.log('[capture] Using LLM extraction for conversation content, length:', finalContent.length);
-        }
+        deps.logger?.info('capture: using LLM extraction', { contentLength: finalContent.length });
 
         const captureResult = await deps.captureService.capture({
           agentId: finalAgentId,
@@ -223,11 +538,12 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
 
       // 直接存储模式（短内容或没有 captureService）
       if (!deps.captureService) {
-        console.log('[capture] Skipping LLM extraction - captureService is undefined, content length:', finalContent.length);
+        deps.logger?.debug('capture: skipping LLM extraction, captureService undefined', { contentLength: finalContent.length });
       }
       const storeConfig = config.getConfig<{ defaultImportance?: number; defaultScopeScore?: number }>('memoryService.store');
-      const defaultImportance = storeConfig?.defaultImportance ?? config.getConfig<number>('memoryService.store.defaultImportance') ?? 5;
-      const defaultScopeScore = storeConfig?.defaultScopeScore ?? config.getConfig<number>('memoryService.store.defaultScopeScore') ?? defaultImportance;
+      // P1 FIX: 简化配置读取链，避免重复调用
+      const defaultImportance = storeConfig?.defaultImportance ?? 5;
+      const defaultScopeScore = storeConfig?.defaultScopeScore ?? defaultImportance;
       const finalScores = {
         importance: scores?.importance ?? defaultImportance,
         scopeScore: scores?.scopeScore ?? scores?.importance ?? defaultScopeScore,
@@ -278,17 +594,10 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
       });
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error ? error.stack : undefined;
-      if (deps.logger) {
-        deps.logger.error('[capture] 500 error', { message: errMsg, stack: errStack });
-      } else {
-        console.error('[capture] 500 error:', errMsg, errStack);
-      }
+      deps.logger?.error('capture: error', { message: errMsg, stack: error instanceof Error ? error.stack : undefined });
       res.status(500).json({
         success: false,
         error: errMsg,
-        stack: errStack,
-        details: errStack,
       });
     }
   });
@@ -299,16 +608,20 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    */
   router.post('/recall', async (req: Request, res: Response) => {
     try {
-      const { query, types, limit } = req.body as {
+      const { query, types, limit, agentId, sessionId } = req.body as {
         query?: string;
         types?: string[];
         limit?: number;
+        agentId?: string;
+        sessionId?: string;
       };
 
       const result = await deps.memoryService.recall({
         query,
         types: types as MemoryType[],
         limit: limit || 20,
+        agentId: agentId,
+        sessionId: sessionId,
       });
 
       res.json({
@@ -318,9 +631,11 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
           totalFound: result.totalFound,
           scopeDistribution: result.scopeDistribution,
           meetsMinimum: result.meetsMinimum,
+          consolidatedSummary: result.consolidatedSummary,
         },
       });
     } catch (error) {
+      deps.logger?.error('memories.recall: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to recall memories',
@@ -342,6 +657,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: stats,
       });
     } catch (error) {
+      deps.logger?.error('memories.degradation-stats: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get degradation stats',
@@ -354,8 +670,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 获取单条记忆详情
    */
   router.get('/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       const memory = await deps.memoryService.get(id);
 
       if (!memory) {
@@ -368,6 +684,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: memory,
       });
     } catch (error) {
+      deps.logger?.error('memories.get: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get memory',
@@ -381,8 +698,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 如果提供了 content，会创建新版本
    */
   router.put('/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       const { content, importance, scopeScore, scope, tags } = req.body;
 
       await deps.memoryService.update(id, {
@@ -401,6 +718,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: memory,
       });
     } catch (error) {
+      deps.logger?.error('memories.update: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to update memory',
@@ -413,8 +731,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 删除记忆（删除所有版本）
    */
   router.delete('/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       await deps.memoryService.deleteMemory(id);
 
       res.json({
@@ -422,6 +740,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         message: 'Memory deleted',
       });
     } catch (error) {
+      deps.logger?.error('memories.delete: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete memory',
@@ -434,8 +753,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 强化记忆
    */
   router.post('/reinforce/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       const { boostAmount } = req.body as { boostAmount?: number };
 
       const memory = await deps.memoryService.reinforce(id, boostAmount);
@@ -450,6 +769,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: memory,
       });
     } catch (error) {
+      deps.logger?.error('memories.reinforce: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to reinforce memory',
@@ -480,6 +800,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         message: `Reinforced ${memoryIds.length} memories`,
       });
     } catch (error) {
+      deps.logger?.error('memories.reinforce-batch: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to reinforce memories',
@@ -492,8 +813,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 归档记忆
    */
   router.post('/archive/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       await deps.memoryService.archiveMemory(id);
 
       res.json({
@@ -501,6 +822,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         message: 'Memory archived',
       });
     } catch (error) {
+      deps.logger?.error('memories.archive: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to archive memory',
@@ -513,8 +835,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 恢复记忆
    */
   router.post('/restore/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       await deps.memoryService.restoreMemory(id);
 
       res.json({
@@ -522,6 +844,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         message: 'Memory restored',
       });
     } catch (error) {
+      deps.logger?.error('memories.restore: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to restore memory',
@@ -534,8 +857,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 检查并执行作用域升级
    */
   router.post('/upgrade-scope/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       const upgraded = await deps.memoryService.checkAndUpgradeScope(id);
 
       res.json({
@@ -543,6 +866,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: { upgraded },
       });
     } catch (error) {
+      deps.logger?.error('memories.upgrade-scope: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to upgrade scope',
@@ -563,6 +887,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: report,
       });
     } catch (error) {
+      deps.logger?.error('memories.forgetting-cycle: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to run forgetting cycle',
@@ -583,6 +908,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         data: report,
       });
     } catch (error) {
+      deps.logger?.error('memories.scope-degradation-cycle: error', { error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to run scope degradation cycle',
@@ -595,8 +921,8 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
    * 获取记忆版本链
    */
   router.get('/:id/versions', async (req: Request, res: Response) => {
+    const { id } = req.params;
     try {
-      const { id } = req.params;
       const memory = await deps.memoryService.get(id);
 
       if (!memory) {
@@ -613,6 +939,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Router {
         },
       });
     } catch (error) {
+      deps.logger?.error('memories.versions: error', { id, error: error instanceof Error ? error.message : String(error) });
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get versions',

@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { createLogger, type ILogger } from '../../shared/logging';
+import type { ILogger } from '../../shared/logging';
 import { APIError, ErrorCode } from '../types';
 export { ErrorCode } from '../types';
 

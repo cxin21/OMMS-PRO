@@ -108,6 +108,15 @@ export class MemoryCaptureService {
 
     // 先创建 logger，再初始化分布式锁管理器
     this.logger = createServiceLogger('MemoryCaptureService');
+
+    // Guard: wait timeout must be >= lock TTL to prevent waiters from proceeding without the lock
+    if (this.versionLockWaitMs < this.versionLockTTLMs) {
+      this.logger.warn('versionLockWaitMs is less than versionLockTTLMs, clamping to TTL', {
+        configuredWaitMs: this.versionLockWaitMs,
+        ttlMs: this.versionLockTTLMs,
+      });
+      this.versionLockWaitMs = this.versionLockTTLMs;
+    }
     this.inclusionDetector = new MemoryInclusionDetector();
     this.incrementalCaptureManager = new IncrementalCaptureManager();
 
@@ -273,7 +282,7 @@ export class MemoryCaptureService {
       maxCount: this.config.maxMemoriesPerCapture,
       typeHints: this.getDefaultTypes(),
     });
-    this.logger.error('LLM extraction complete', { count: extracted.length, extracted: extracted });
+    this.logger.info('LLM extraction complete', { count: extracted.length });
 
     // 2. 置信度过滤
     const qualified = this.filterByConfidence(extracted, result.skipped);
@@ -348,7 +357,7 @@ export class MemoryCaptureService {
             break;
           }
 
-          if (candidateSimilarity >= this.config.inclusionSimilarityThreshold && candidateSimilarity < 0.95) {
+          if (candidateSimilarity >= this.config.inclusionSimilarityThreshold && candidateSimilarity < MemoryDefaults.identicalThreshold) {
             const inclusionResult = await this.checkSemanticInclusion(enriched.item, enriched.summary, candidate.memoryId);
 
             if (inclusionResult) {
